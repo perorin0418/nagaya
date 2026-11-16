@@ -1,6 +1,35 @@
-import type { AgentState, NewSessionInput, PtyExit, RulesPayload, SessionConfig } from './types'
+import type {
+  AgentState,
+  Layout,
+  NewSessionInput,
+  PtyExit,
+  RulesPayload,
+  SessionConfig,
+  SessionGroup,
+  Settings,
+  ThemeSetting,
+} from './types'
 
-export type SessionMenuAction = 'edit' | 'restart' | 'delete' | null
+/** セッションの右クリックメニューで選ばれた操作（削除は確認済み） */
+export type SessionMenuAction =
+  | { type: 'edit' }
+  | { type: 'duplicate' }
+  | { type: 'restart' }
+  | { type: 'delete' }
+  | { type: 'move'; groupId: string | null }
+  | { type: 'move-new-group' }
+  | null
+
+/** グループの右クリックメニューで選ばれた操作（削除は確認済み） */
+export type GroupMenuAction = { type: 'new-session' } | { type: 'rename' } | { type: 'delete' } | null
+
+export type MenuAction =
+  | 'new-session'
+  | 'new-group'
+  | 'toggle-explain'
+  | 'save-screen'
+  | 'next-session'
+  | 'prev-session'
 
 export interface AppInfo {
   platform: string
@@ -12,14 +41,24 @@ export interface AppInfo {
 export interface NagayaApi {
   info(): Promise<AppInfo>
 
-  listSessions(): Promise<{ sessions: SessionConfig[]; selectedId: string | null }>
-  createSession(input: NewSessionInput): Promise<SessionConfig>
-  updateSession(cfg: SessionConfig): Promise<void>
-  removeSession(id: string): Promise<void>
-  /** サイドバーの右クリックメニューを出し、選ばれた操作を返す（削除は確認済みで返る） */
+  getLayout(): Promise<Layout & { selectedId: string | null }>
+  createSession(input: NewSessionInput): Promise<{ session: SessionConfig; layout: Layout }>
+  updateSession(cfg: SessionConfig): Promise<Layout>
+  removeSession(id: string): Promise<Layout>
+  /** セッションを groupId のグループの beforeId の前へ（null ならグループの最後） */
+  moveSession(id: string, groupId: string | null, beforeId: string | null): Promise<Layout>
+  /** サイドバーの右クリックメニューを出し、選ばれた操作を返す */
   sessionMenu(id: string): Promise<SessionMenuAction>
 
-  ptyStart(id: string, cols: number, rows: number): Promise<{ ok: boolean; error?: string }>
+  createGroup(name: string): Promise<{ group: SessionGroup; layout: Layout }>
+  renameGroup(id: string, name: string): Promise<Layout>
+  removeGroup(id: string): Promise<Layout>
+  setGroupCollapsed(id: string, collapsed: boolean): Promise<Layout>
+  moveGroup(id: string, beforeId: string | null): Promise<Layout>
+  groupMenu(id: string): Promise<GroupMenuAction>
+
+  /** reconnect が true なら再接続のコマンドで起動する */
+  ptyStart(id: string, cols: number, rows: number, reconnect?: boolean): Promise<{ ok: boolean; error?: string }>
   ptyWrite(id: string, data: string): void
   ptyResize(id: string, cols: number, rows: number): void
   ptyKill(id: string): void
@@ -31,6 +70,10 @@ export interface NagayaApi {
   openRulesFolder(): Promise<void>
   onRulesChanged(cb: (p: RulesPayload) => void): () => void
 
+  getSettings(): Promise<Settings>
+  setTheme(theme: ThemeSetting): Promise<void>
+  onSettingsChanged(cb: (s: Settings) => void): () => void
+
   /** 確定した状態を main に知らせる（通知・タイトル用） */
   reportState(id: string, state: AgentState): void
   /** 選択中のセッションを main に知らせる（通知を出すかの判断・保存用） */
@@ -38,7 +81,7 @@ export interface NagayaApi {
   /** 通知のクリックなどで main からセッションの選択を求められたとき */
   onSelectSession(cb: (id: string) => void): () => void
   /** メニューの「新しいセッション」など */
-  onMenu(cb: (action: 'new-session' | 'toggle-explain' | 'save-screen' | 'next-session' | 'prev-session') => void): () => void
+  onMenu(cb: (action: MenuAction) => void): () => void
 
   clipboardRead(): Promise<string>
   clipboardWrite(text: string): void

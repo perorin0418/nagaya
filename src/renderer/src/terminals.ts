@@ -7,11 +7,15 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { compileRuleSet, detect, Stabilizer, type CompiledRuleSet, type DetectResult } from '@shared/detect'
-import type { AgentState, RulesPayload } from '@shared/types'
+import { SSH_CONNECTION_ERROR, type AgentState, type RulesPayload, type SessionConfig } from '@shared/types'
 
 const api = window.nagaya
 const isMac = navigator.platform.toLowerCase().includes('mac')
 const DETECT_INTERVAL_MS = 200
+/** 再接続までの待ち時間（秒）。回数が増えるほど長くし、最後の値で繰り返す */
+const RECONNECT_DELAYS = [2, 5, 10, 20, 30]
+/** これより長くつながっていたら、再接続の回数を数え直す */
+const RECONNECT_RESET_MS = 60_000
 
 const LIGHT: ITheme = {
   background: '#ffffff',
@@ -30,9 +34,21 @@ const DARK: ITheme = {
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
 const theme = (): ITheme => (darkQuery.matches ? DARK : LIGHT)
 
+/** 端末の中のプロセスの状態 */
+export type ConnStatus = 'running' | 'exited' | 'reconnecting'
+
+export interface ConnEvent {
+  id: string
+  status: ConnStatus
+  /** 再接続の何回目か（reconnecting のとき） */
+  attempt?: number
+  /** 再接続するまでの秒数（reconnecting のとき） */
+  delaySec?: number
+}
+
 interface Entry {
   id: string
-  agent: string
+  cfg: SessionConfig
   term: Terminal
   fit: FitAddon
   el: HTMLDivElement
@@ -41,6 +57,10 @@ interface Entry {
   stabilizer: Stabilizer
   last: DetectResult | null
   observer: ResizeObserver
+  /** 最後に起動した時刻（再接続の回数を数え直すため） */
+  startedAt: number
+  attempt: number
+  reconnectTimer: number | null
 }
 
 export interface StateEvent {
@@ -56,7 +76,7 @@ class TerminalManager {
   private ruleErrors: string[] = []
   private stateListeners = new Set<Listener<StateEvent>>()
   private detailListeners = new Set<Listener<{ id: string; result: DetectResult | null }>>()
-  private exitListeners = new Set<Listener<{ id: string; running: boolean }>>()
+  private connListeners = new Set<Listener<ConnEvent>>()
   private explainId: string | null = null
 
   constructor() {
@@ -67,14 +87,7 @@ class TerminalManager {
         e.dirty = true
       })
     })
-    api.onPtyExit(({ id, exitCode }) => {
-      const e = this.entries.get(id)
-      if (!e) return
-      e.running = false
-      e.term.write(`\r\n\x1b[2m[プロセスが終了しました（終了コード ${exitCode}）。Enter で起動し直します]\x1b[0m\r\n`)
-      e.dirty = true
-      this.exitListeners.forEach((l) => l({ id, running: false }))
-    })
+    api.onPtyExit(({ id, exitCode }) => this.onExit(id, exitCode))
     darkQuery.addEventListener('change', () => {
       for (const e of this.entries.values()) e.term.options.theme = theme()
     })
@@ -97,7 +110,7 @@ class TerminalManager {
     this.ruleErrors = errors
     // 安定化の時間もルールに合わせて更新し、全セッションを判定し直す
     for (const e of this.entries.values()) {
-      e.stabilizer.stableMs = next.get(e.agent)?.stableMs ?? 500
+      e.stabilizer.stableMs = next.get(e.cfg.agent)?.stableMs ?? 500
       e.dirty = true
     }
   }
@@ -110,10 +123,69 @@ class TerminalManager {
     return [...this.ruleSets.keys()]
   }
 
+  // ---- 終了と再接続 ----
+
+  private onExit(id: string, exitCode: number): void {
+    const e = this.entries.get(id)
+    if (!e) return
+    e.running = false
+    // 終わったプロセスの状態（確認待ちなど）を残さない
+    e.stabilizer.reset()
+    e.last = null
+    this.emitState(id, 'unknown')
+    if (e.cfg.autoReconnect && exitCode === SSH_CONNECTION_ERROR) {
+      if (performance.now() - e.startedAt > RECONNECT_RESET_MS) e.attempt = 0
+      this.scheduleReconnect(e)
+      return
+    }
+    e.term.write(`\r\n\x1b[2m[プロセスが終了しました（終了コード ${exitCode}）。Enter で起動し直します]\x1b[0m\r\n`)
+    this.emitConn({ id, status: 'exited' })
+  }
+
+  private scheduleReconnect(e: Entry): void {
+    const delaySec = RECONNECT_DELAYS[Math.min(e.attempt, RECONNECT_DELAYS.length - 1)]
+    e.attempt++
+    e.term.write(
+      `\r\n\x1b[33m[接続が切れました（終了コード ${SSH_CONNECTION_ERROR}）。${delaySec} 秒後に再接続します（${e.attempt} 回目）。` +
+        `Enter ですぐに再接続、Esc で中止]\x1b[0m\r\n`,
+    )
+    this.clearReconnect(e)
+    e.reconnectTimer = window.setTimeout(() => {
+      e.reconnectTimer = null
+      void this.reconnect(e.id)
+    }, delaySec * 1000)
+    this.emitConn({ id: e.id, status: 'reconnecting', attempt: e.attempt, delaySec })
+  }
+
+  private clearReconnect(e: Entry): void {
+    if (e.reconnectTimer !== null) window.clearTimeout(e.reconnectTimer)
+    e.reconnectTimer = null
+  }
+
+  /** 再接続する（画面は消さずに続ける） */
+  async reconnect(id: string): Promise<void> {
+    const e = this.entries.get(id)
+    if (!e || e.running) return
+    this.clearReconnect(e)
+    e.term.write('\x1b[2m[再接続します…]\x1b[0m\r\n')
+    await this.spawn(e, true)
+  }
+
+  /** 再接続の待ちをやめる */
+  cancelReconnect(id: string): void {
+    const e = this.entries.get(id)
+    if (!e || e.reconnectTimer === null) return
+    this.clearReconnect(e)
+    e.attempt = 0
+    e.term.write('\x1b[2m[再接続をやめました。Enter で起動し直します]\x1b[0m\r\n')
+    this.emitConn({ id, status: 'exited' })
+  }
+
   // ---- 端末 ----
 
   /** 端末を作って container に置き、PTY を起動する（作成済みなら置き直すだけ） */
-  attach(id: string, agent: string, container: HTMLElement): void {
+  attach(cfg: SessionConfig, container: HTMLElement): void {
+    const id = cfg.id
     let e = this.entries.get(id)
     if (e) {
       if (e.el.parentElement !== container) container.appendChild(e.el)
@@ -140,15 +212,18 @@ class TerminalManager {
 
     const entry: Entry = {
       id,
-      agent,
+      cfg,
       term,
       fit,
       el,
       running: false,
       dirty: false,
-      stabilizer: new Stabilizer(this.ruleSets.get(agent)?.stableMs ?? 500),
+      stabilizer: new Stabilizer(this.ruleSets.get(cfg.agent)?.stableMs ?? 500),
       last: null,
       observer: new ResizeObserver(() => this.fitEntry(entry)),
+      startedAt: 0,
+      attempt: 0,
+      reconnectTimer: null,
     }
     this.entries.set(id, entry)
     entry.observer.observe(el)
@@ -156,6 +231,10 @@ class TerminalManager {
     term.onData((data) => {
       if (entry.running) {
         api.ptyWrite(id, data)
+      } else if (entry.reconnectTimer !== null) {
+        // 再接続の待ち中: Enter ですぐ再接続、Esc で中止
+        if (data === '\r') void this.reconnect(id)
+        else if (data === '\x1b') this.cancelReconnect(id)
       } else if (data === '\r') {
         void this.start(id)
       }
@@ -222,18 +301,27 @@ class TerminalManager {
     if (`${e.term.cols}x${e.term.rows}` !== before && e.running) api.ptyResize(e.id, e.term.cols, e.term.rows)
   }
 
+  /** 起動する（再接続の回数も数え直す） */
   async start(id: string): Promise<void> {
     const e = this.entries.get(id)
     if (!e) return
+    this.clearReconnect(e)
+    e.attempt = 0
+    await this.spawn(e, false)
+  }
+
+  private async spawn(e: Entry, reconnect: boolean): Promise<void> {
     this.fitEntry(e)
     e.stabilizer.reset()
-    this.emitState(id, 'unknown')
-    const r = await api.ptyStart(id, e.term.cols, e.term.rows)
+    this.emitState(e.id, 'unknown')
+    e.startedAt = performance.now()
+    const r = await api.ptyStart(e.id, e.term.cols, e.term.rows, reconnect)
     if (r.ok) {
       e.running = true
-      this.exitListeners.forEach((l) => l({ id, running: true }))
+      this.emitConn({ id: e.id, status: 'running' })
     } else {
       e.term.write(`\r\n\x1b[31m起動できませんでした: ${r.error ?? ''}\x1b[0m\r\n\x1b[2m[Enter で再試行します]\x1b[0m\r\n`)
+      this.emitConn({ id: e.id, status: 'exited' })
     }
   }
 
@@ -246,12 +334,14 @@ class TerminalManager {
     await this.start(id)
   }
 
-  setAgent(id: string, agent: string): void {
-    const e = this.entries.get(id)
+  /** セッションの設定が変わったとき（ルール・自動再接続など） */
+  updateConfig(cfg: SessionConfig): void {
+    const e = this.entries.get(cfg.id)
     if (!e) return
-    e.agent = agent
-    e.stabilizer.stableMs = this.ruleSets.get(agent)?.stableMs ?? 500
+    e.cfg = cfg
+    e.stabilizer.stableMs = this.ruleSets.get(cfg.agent)?.stableMs ?? 500
     e.dirty = true
+    if (!cfg.autoReconnect && e.reconnectTimer !== null) this.cancelReconnect(cfg.id)
   }
 
   focus(id: string): void {
@@ -264,6 +354,7 @@ class TerminalManager {
   dispose(id: string): void {
     const e = this.entries.get(id)
     if (!e) return
+    this.clearReconnect(e)
     e.observer.disconnect()
     e.term.dispose()
     e.el.remove()
@@ -293,7 +384,7 @@ class TerminalManager {
       if (!e.dirty && !e.stabilizer.pending) continue
       if (e.dirty) {
         e.dirty = false
-        const rs = this.ruleSets.get(e.agent)
+        const rs = this.ruleSets.get(e.cfg.agent)
         e.last = rs ? detect(this.screenLines(e.id), rs) : null
         if (this.explainId === e.id) this.detailListeners.forEach((l) => l({ id: e.id, result: e.last }))
       }
@@ -312,9 +403,13 @@ class TerminalManager {
     return () => this.stateListeners.delete(l)
   }
 
-  onRunning(l: Listener<{ id: string; running: boolean }>): () => void {
-    this.exitListeners.add(l)
-    return () => this.exitListeners.delete(l)
+  private emitConn(ev: ConnEvent): void {
+    this.connListeners.forEach((l) => l(ev))
+  }
+
+  onConn(l: Listener<ConnEvent>): () => void {
+    this.connListeners.add(l)
+    return () => this.connListeners.delete(l)
   }
 
   /** 判定の詳細を受け取る（id のセッションだけ。null で止める） */
@@ -323,7 +418,7 @@ class TerminalManager {
     this.detailListeners.add(l)
     const e = id ? this.entries.get(id) : undefined
     if (e) {
-      const rs = this.ruleSets.get(e.agent)
+      const rs = this.ruleSets.get(e.cfg.agent)
       e.last = rs ? detect(this.screenLines(e.id), rs) : null
       l({ id: e.id, result: e.last })
     }

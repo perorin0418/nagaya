@@ -6,6 +6,7 @@ directories:
   buildResources: build
 files:
   - out/**
+  - resources/**
   - package.json
   - '!**/*.{md,map,pdb,ts,cc,h,gyp,gypi}'
   - '!node_modules/node-pty/{src,deps,scripts,third_party,typings}/**'
@@ -18,9 +19,11 @@ extraResources:
 # node-pty はネイティブモジュールなので asar の外に出す
 asarUnpack:
   - node_modules/node-pty/**
+  - resources/**
 # node-pty 1.1 は Windows・macOS 向けのビルド済みバイナリ（N-API）を同梱しているので、作り直さない
 npmRebuild: false
 win:
+  icon: build/icon.ico
   artifactName: ${productName}-${version}-win-x64.${ext}
   target:
     - target: nsis
@@ -39,12 +42,14 @@ nsis:
   artifactName: ${productName}-${version}-setup.${ext}
   shortcutName: nagaya
 mac:
+  icon: build/icon.png
   target: [dmg]
   category: public.app-category.developer-tools
   files:
     - '!node_modules/node-pty/build/**'
     - '!node_modules/node-pty/prebuilds/{win32,linux}-*/**'
 linux:
+  icon: build/icon.png
   target: [AppImage]
   category: Development
   files:

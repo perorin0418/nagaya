@@ -28,7 +28,11 @@ export function spawnSpec(cfg: Pick<SessionConfig, 'command' | 'cwd'>): SpawnSpe
   if (!cfg.command) {
     args = win ? (isPwsh ? ['-NoLogo'] : []) : ['-l']
   } else if (win) {
-    args = isPwsh ? ['-NoLogo', '-NoProfile', '-Command', cfg.command] : ['/d', '/s', '/c', cfg.command]
+    // Windows PowerShell 5.1 の -Command は、終了コードを 0 か 1 にしてしまう。
+    // SSH が切れたこと（ssh の終了コード 255）を伝えるため、最後のコマンドの終了コードで終わらせる
+    args = isPwsh
+      ? ['-NoLogo', '-NoProfile', '-Command', `${cfg.command}\nexit $LASTEXITCODE`]
+      : ['/d', '/s', '/c', cfg.command]
   } else {
     args = ['-lc', cfg.command]
   }
@@ -59,9 +63,11 @@ export class PtyManager {
     return this.ptys.has(id)
   }
 
-  start(cfg: SessionConfig, cols: number, rows: number): void {
+  /** reconnect が true なら、再接続のコマンド（あれば）で起動する */
+  start(cfg: SessionConfig, cols: number, rows: number, reconnect = false): void {
     this.kill(cfg.id)
-    const spec = spawnSpec(cfg)
+    const command = reconnect && cfg.reconnectCommand ? cfg.reconnectCommand : cfg.command
+    const spec = spawnSpec({ command, cwd: cfg.cwd })
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
     env.TERM = 'xterm-256color'

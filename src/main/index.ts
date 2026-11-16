@@ -7,12 +7,14 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   Notification,
   shell,
   type MenuItemConstructorOptions,
 } from 'electron'
-import type { SessionMenuAction } from '@shared/api'
-import type { AgentState, NewSessionInput, SessionConfig } from '@shared/types'
+import type { GroupMenuAction, SessionMenuAction } from '@shared/api'
+import type { AgentState, NewSessionInput, SessionConfig, ThemeSetting } from '@shared/types'
+import icon from '../../resources/icon.png?asset'
 import { defaultShell, PtyManager } from './pty'
 import { RulesLoader } from './rules'
 import { SessionStore } from './store'
@@ -48,6 +50,21 @@ function main(): void {
     (id, data) => send('pty:data', id, data),
     (id, exitCode, signal) => send('pty:exit', { id, exitCode, signal }),
   )
+
+  const THEME_LABEL: Record<ThemeSetting, string> = { system: 'システムに合わせる', light: 'ライト', dark: 'ダーク' }
+
+  function backgroundColor(): string {
+    return nativeTheme.shouldUseDarkColors ? '#1c1c1b' : '#f7f6f2'
+  }
+
+  /** テーマを切り替える。renderer の prefers-color-scheme も追従する */
+  function applyTheme(theme: ThemeSetting): void {
+    store.setTheme(theme)
+    nativeTheme.themeSource = theme
+    win?.setBackgroundColor(backgroundColor())
+    buildMenu()
+    send('settings:changed', store.settings)
+  }
 
   function updateTitle(): void {
     if (!win) return
@@ -122,6 +139,7 @@ function main(): void {
         label: 'ファイル',
         submenu: [
           { label: '新しいセッション…', ...acc('CmdOrCtrl+Shift+T'), click: menu('new-session') },
+          { label: '新しいグループ…', click: menu('new-group') },
           { type: 'separator' },
           { label: '次のセッション', ...acc('Ctrl+Tab'), click: menu('next-session') },
           { label: '前のセッション', ...acc('Ctrl+Shift+Tab'), click: menu('prev-session') },
@@ -138,6 +156,16 @@ function main(): void {
         label: '表示',
         submenu: [
           { label: '判定の詳細', ...acc('CmdOrCtrl+Shift+D'), click: menu('toggle-explain') },
+          { type: 'separator' },
+          {
+            label: 'テーマ',
+            submenu: (['system', 'light', 'dark'] as ThemeSetting[]).map((t) => ({
+              label: THEME_LABEL[t],
+              type: 'radio' as const,
+              checked: store.settings.theme === t,
+              click: () => applyTheme(t),
+            })),
+          },
           { type: 'separator' },
           { role: 'resetZoom', label: '実際のサイズ' },
           { role: 'zoomIn', label: '拡大' },
@@ -175,7 +203,9 @@ function main(): void {
       minWidth: 640,
       minHeight: 400,
       title: 'nagaya',
-      backgroundColor: '#1c1c1b',
+      backgroundColor: backgroundColor(),
+      // Windows・macOS の配布物は実行ファイルのアイコンが使われる。開発中と Linux 用にここでも指定する
+      icon,
       show: false,
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
@@ -213,9 +243,15 @@ function main(): void {
   // ---- IPC ----
   ipcMain.handle('info', () => ({ platform: process.platform, defaultShell: defaultShell(), version: app.getVersion() }))
 
-  ipcMain.handle('sessions:list', () => ({ sessions: store.list(), selectedId: store.selectedId }))
-  ipcMain.handle('sessions:create', (_e, input: NewSessionInput) => store.create(input))
-  ipcMain.handle('sessions:update', (_e, cfg: SessionConfig) => store.update(cfg))
+  ipcMain.handle('layout:get', () => ({ ...store.layout(), selectedId: store.selectedId }))
+  ipcMain.handle('sessions:create', (_e, input: NewSessionInput) => {
+    const session = store.create(input)
+    return { session, layout: store.layout() }
+  })
+  ipcMain.handle('sessions:update', (_e, cfg: SessionConfig) => {
+    store.update(cfg)
+    return store.layout()
+  })
   ipcMain.handle('sessions:remove', (_e, id: string) => {
     ptys.kill(id)
     store.remove(id)
@@ -223,38 +259,108 @@ function main(): void {
     notifications.get(id)?.close()
     notifications.delete(id)
     updateTitle()
+    return store.layout()
   })
+  ipcMain.handle('sessions:move', (_e, id: string, groupId: string | null, beforeId: string | null) =>
+    store.moveSession(id, groupId, beforeId),
+  )
+
+  /** メニューを出して、選ばれた値を返す（何も選ばれなければ null） */
+  function popup<T>(build: (choose: (v: T) => void) => MenuItemConstructorOptions[]): Promise<T | null> {
+    return new Promise((resolve) => {
+      let chosen: T | null = null
+      Menu.buildFromTemplate(build((v) => (chosen = v))).popup({ window: win!, callback: () => resolve(chosen) })
+    })
+  }
+
+  async function confirm(message: string, detail: string, ok: string): Promise<boolean> {
+    if (!win) return false
+    const r = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: [ok, 'キャンセル'],
+      defaultId: 1,
+      cancelId: 1,
+      message,
+      detail,
+    })
+    return r.response === 0
+  }
+
   ipcMain.handle('sessions:menu', async (_e, id: string): Promise<SessionMenuAction> => {
     const cfg = store.get(id)
     if (!win || !cfg) return null
-    const picked = await new Promise<SessionMenuAction>((resolve) => {
-      let chosen: SessionMenuAction = null
-      Menu.buildFromTemplate([
-        { label: '編集…', click: () => (chosen = 'edit') },
-        { label: '再起動', click: () => (chosen = 'restart') },
-        { type: 'separator' },
-        { label: '削除…', click: () => (chosen = 'delete') },
-      ]).popup({ window: win!, callback: () => resolve(chosen) })
-    })
-    if (picked === 'delete') {
-      const r = await dialog.showMessageBox(win, {
-        type: 'warning',
-        buttons: ['削除', 'キャンセル'],
-        defaultId: 1,
-        cancelId: 1,
-        message: `セッション「${cfg.name}」を削除しますか？`,
-        detail: '実行中のプロセスは終了します。',
-      })
-      return r.response === 0 ? 'delete' : null
+    const { groups } = store.layout()
+    const picked = await popup<NonNullable<SessionMenuAction>>((choose) => [
+      { label: '編集…', click: () => choose({ type: 'edit' }) },
+      { label: '複製…', click: () => choose({ type: 'duplicate' }) },
+      { label: '再起動', click: () => choose({ type: 'restart' }) },
+      {
+        label: 'グループへ移動',
+        submenu: [
+          ...groups.map((g) => ({
+            label: g.name,
+            type: 'checkbox' as const,
+            checked: cfg.groupId === g.id,
+            enabled: cfg.groupId !== g.id,
+            click: () => choose({ type: 'move', groupId: g.id }),
+          })),
+          ...(groups.length ? [{ type: 'separator' as const }] : []),
+          { label: '新しいグループ…', click: () => choose({ type: 'move-new-group' }) },
+          {
+            label: 'グループから外す',
+            enabled: cfg.groupId !== null,
+            click: () => choose({ type: 'move', groupId: null }),
+          },
+        ],
+      },
+      { type: 'separator' },
+      { label: '削除…', click: () => choose({ type: 'delete' }) },
+    ])
+    if (picked?.type === 'delete') {
+      const ok = await confirm(`セッション「${cfg.name}」を削除しますか？`, '実行中のプロセスは終了します。', '削除')
+      return ok ? picked : null
     }
     return picked
   })
 
-  ipcMain.handle('pty:start', (_e, id: string, cols: number, rows: number) => {
+  // ---- グループ ----
+  ipcMain.handle('groups:create', (_e, name: string) => {
+    const group = store.createGroup(name)
+    return { group, layout: store.layout() }
+  })
+  ipcMain.handle('groups:rename', (_e, id: string, name: string) => store.renameGroup(id, name))
+  ipcMain.handle('groups:remove', (_e, id: string) => store.removeGroup(id))
+  ipcMain.handle('groups:collapse', (_e, id: string, collapsed: boolean) => store.setGroupCollapsed(id, collapsed))
+  ipcMain.handle('groups:move', (_e, id: string, beforeId: string | null) => store.moveGroup(id, beforeId))
+  ipcMain.handle('groups:menu', async (_e, id: string): Promise<GroupMenuAction> => {
+    const g = store.group(id)
+    if (!win || !g) return null
+    const picked = await popup<NonNullable<GroupMenuAction>>((choose) => [
+      { label: 'このグループに新しいセッション…', click: () => choose({ type: 'new-session' }) },
+      { label: '名前を変更…', click: () => choose({ type: 'rename' }) },
+      { type: 'separator' },
+      { label: 'グループを削除…', click: () => choose({ type: 'delete' }) },
+    ])
+    if (picked?.type === 'delete') {
+      const ok = await confirm(
+        `グループ「${g.name}」を削除しますか？`,
+        '中のセッションは消えずに「グループなし」に移ります。',
+        '削除',
+      )
+      return ok ? picked : null
+    }
+    return picked
+  })
+
+  // ---- 設定 ----
+  ipcMain.handle('settings:get', () => store.settings)
+  ipcMain.handle('settings:theme', (_e, theme: ThemeSetting) => applyTheme(theme))
+
+  ipcMain.handle('pty:start', (_e, id: string, cols: number, rows: number, reconnect: boolean) => {
     const cfg = store.get(id)
     if (!cfg) return { ok: false, error: 'セッションが見つかりません' }
     try {
-      ptys.start(cfg, cols, rows)
+      ptys.start(cfg, cols, rows, reconnect)
       return { ok: true }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
@@ -301,6 +407,8 @@ function main(): void {
     win.show()
     win.focus()
   })
+
+  nativeTheme.themeSource = store.settings.theme
 
   app.whenReady().then(() => {
     buildMenu()

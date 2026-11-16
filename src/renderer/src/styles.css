@@ -16,6 +16,7 @@
   --amber-fg: #854f0b;
   --red-fg: #a32d2d;
   --term-bg: #ffffff;
+  --drop: #378add;
   --mono: 'Cascadia Mono', Consolas, 'BIZ UDGothic', 'Noto Sans Mono CJK JP', ui-monospace, monospace;
   color-scheme: light dark;
 }
@@ -106,22 +107,93 @@ button.icon:hover {
   overflow-y: auto;
   min-height: 0;
 }
-.host {
+.side-head-buttons {
+  display: flex;
+  gap: 4px;
+}
+button.icon svg {
+  display: block;
+  margin: auto;
+}
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text2);
   font-size: 12px;
-  margin: 12px 8px 4px;
+  margin: 10px 0 2px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+}
+.group-head:hover {
+  background: var(--hover);
+}
+.group-head.loose {
+  cursor: default;
+}
+.group-head.loose:hover {
+  background: transparent;
+}
+.chev {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.1s;
+}
+.chev.open {
+  transform: rotate(90deg);
+}
+.group-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.group-sum {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.group-empty {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 8px 4px 22px;
+}
+.drop-before {
+  border-top-color: var(--drop) !important;
+}
+.drop-after {
+  border-bottom-color: var(--drop) !important;
+}
+.drop-into {
+  background: var(--sel) !important;
+  outline: 1px dashed var(--drop);
 }
 .sess {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 8px;
+  padding: 5px 8px;
   border-radius: 8px;
   cursor: pointer;
   user-select: none;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+}
+.host-tag {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sess:hover {
   background: var(--hover);
@@ -155,11 +227,34 @@ button.icon:hover {
   margin-left: auto;
   font-size: 11px;
   color: var(--muted);
+  flex: none;
+}
+.st.warn {
+  color: var(--amber-fg);
 }
 .side-foot {
   font-size: 11px;
   color: var(--muted);
   padding: 8px 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+}
+.side-foot .theme {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text2);
+  font-size: 12px;
+}
+.side-foot select {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 4px;
 }
 .rule-errors {
   font-size: 12px;
@@ -252,6 +347,14 @@ button.tool.on {
 }
 .badge.unknown {
   color: var(--muted);
+}
+.badge.reconnecting {
+  background: var(--amber-bg);
+  color: var(--amber-fg);
+}
+.title-group {
+  color: var(--muted);
+  font-weight: normal;
 }
 
 /* ---- 端末 ---- */
@@ -351,6 +454,15 @@ button.tool.on {
   flex-direction: column;
   gap: 12px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+}
+.dialog.small {
+  width: min(420px, calc(100vw - 32px));
+}
+.dialog label.check .check-body {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
 }
 .dialog h2 {
   margin: 0 0 4px;

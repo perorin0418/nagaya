@@ -6,32 +6,64 @@
 名前は「長屋」。作者の別ツール [koya](https://github.com/perorin0418/koya)（小屋）が並んだもの、という意味。
 
 ```
-┌ セッション      [+] ┬ linux-a / myapp   ssh linux-a -t koya run claude -- claude   [確認待ち] ┐
-│ linux-a             │                                                                      │
-│  ● myapp   blocked  │  Do you want to make this edit to auth.ts?                           │
-│  ● api     working  │  ❯ 1. Yes                                                            │
-│ linux-b             │    2. Yes, allow all edits this session                              │
-│  ● infra   idle     │    3. No, and tell Claude what to do differently                     │
-└─────────────────────┴──────────────────────────────────────────────────────────────────────┘
+┌ セッション            [⊞][+] ┬ 認証の作り直し / linux-a / auth-api   ssh … linux-a koya run claude -- claude  [確認待ち] ┐
+│ ⌄ 認証の作り直し             │                                                                              │
+│  ● auth-api  linux-a blocked │  Do you want to make this edit to auth.ts?                                   │
+│  ● auth-web  linux-b working │  ❯ 1. Yes                                                                    │
+│  ● auth-test linux-c idle    │    2. Yes, allow all edits this session                                      │
+│ › ドキュメント          ● 2  │    3. No, and tell Claude what to do differently                             │
+└──────────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
   ● 黄 = blocked（確認待ち・通知を出す）  ● 青 = working（作業中）  ● 灰 = idle（入力待ち）
 ```
 
-- 左のサイドバーにホストごとにセッションが並び、状態の色の点が付く
+- 左のサイドバーに、自由に作ったグループごとにセッションが並び、状態の色の点が付く（同じ作業を複数の Linux に分けて動かすときも1つのグループにまとめられる）
 - セッションを選ぶと右側にその端末（xterm.js）が出る。切り替えても裏のセッションは動き続ける
 - 確認待ちになったら通知を出す。通知をクリックするとそのセッションに切り替わる
 - 状態は **端末に流れてくる画面そのもの** から判定する。間に SSH・koya・コンテナが何段挟まっていても判定できる
+- SSH が不意に切れたら自動で再接続する
+- ライト・ダークのテーマを切り替えられる
 
 ## 使い方
 
 1. 左上の「+」（または Ctrl+Shift+T）で新しいセッションを作る
    - **名前**: サイドバーに出す名前
-   - **ホスト**: サイドバーのまとまりに使う名前（空なら「ローカル」）。入れると「`ssh <ホスト> -t koya run claude -- claude` を入れる」ボタンが出る
+   - **グループ**: 入れるグループ。「新しいグループ…」を選ぶとその場で作れる
+   - **ホスト**: 接続先のホスト名。サイドバーで名前の横に小さく出る。入れると「`ssh … <ホスト> koya run claude -- claude` を入れる」ボタンが出る
    - **コマンド**: 実行するコマンド。空ならシェル（Windows は PowerShell、それ以外はログインシェル）。シェル経由で実行するので、引用符や PATH はふつうに使える
    - **作業ディレクトリ**: 空ならホーム
    - **判定ルール**: ふつうは `claude`
-2. セッションの右クリックで「編集・再起動・削除」
+   - **自動再接続** と **再接続のコマンド**: 後述
+2. セッションの右クリックで「編集・複製・再起動・グループへ移動・削除」。
+   **複製** は、同じ作業を別のホストでも動かすときに使う（設定を写したダイアログが開くので、ホストだけ変える）
 3. プロセスが終わった端末で Enter を押すと起動し直す
 4. セッション一覧は保存され、次に起動したときに復元される（中のプロセスは起動し直し）
+
+### グループ
+
+- サイドバー右上のフォルダーのボタン（またはメニューの「ファイル → 新しいグループ…」）でグループを作る
+- セッションは **ドラッグ＆ドロップ** で並べ替え・グループ間の移動ができる。グループの見出しに落とすとそのグループの最後に入る。何もない所に落とすと「グループなし」に移る
+- グループの見出しもドラッグで並べ替えられる。クリックで開閉する。閉じているときは、中で一番注意が要る状態の点と確認待ちの数が出る
+- グループの見出しの右クリックで「このグループに新しいセッション・名前を変更・削除」。グループを消しても中のセッションは消えず「グループなし」に移る
+- 以前の版（ホストごとに自動でまとめていた版）の設定を読むと、ホストごとのグループに置き換える（見た目は変わらない）
+
+### 自動再接続
+
+SSH が不意に切れたとき（ssh の終了コードが **255** のとき）、自動で再接続する。
+
+- 待ち時間は 2 → 5 → 10 → 20 → 30 秒と延ばし、その後は 30 秒おきに試し続ける。60 秒以上つながっていたら回数を数え直す
+- 待っている間は端末に案内が出る。**Enter ですぐに再接続、Esc で中止**。サイドバーとヘッダーには「再接続中」と出る
+- 再接続しても端末の画面は消さずに続ける
+- **再接続のコマンド** を入れると、再接続のときだけそちらを使う（空なら最初のコマンドと同じ）。ホストを入れていると「前の会話の続きから始める（claude --continue）」ボタンで入れられる。
+  ただし Claude Code の会話の履歴がコンテナの外に残っていないと続きからは始まらない（koya の設定による）
+- Claude Code を終えたとき（終了コード 0 など）や、自動再接続を切ったセッションは再接続しない
+- 回線が切れても ssh がすぐに気づかないことがある。ひな形のコマンドには `-o ServerAliveInterval=15 -o ServerAliveCountMax=3` を付けてあり、45 秒ほどで切断に気づいて終わる。自分でコマンドを書くときも付けておくとよい（`~/.ssh/config` に書いてもよい）
+- Windows の PowerShell 経由でも ssh の終了コードが伝わるようにしてある
+- アプリを閉じたときは再接続ではなく、セッションごと終わる（下の「未決事項・制限」）
+
+### テーマ
+
+サイドバーの下の「テーマ」（またはメニューの「表示 → テーマ」）で **システム / ライト / ダーク** を選ぶ。選んだものは保存される。
+端末の色もテーマに合わせて変わる（Claude Code 自体の配色は Claude Code の `/theme` で選ぶ）。
 
 | 操作 | キー |
 |---|---|
@@ -52,7 +84,7 @@
 - macOS: `~/Library/Application Support/nagaya/`
 - Linux: `~/.config/nagaya/`
 
-ここに `sessions.json`（セッション一覧）と `rules/`（利用者の判定ルール）が置かれる。
+ここに `sessions.json`（セッション・グループの一覧とテーマの設定）と `rules/`（利用者の判定ルール）が置かれる。
 
 ## 状態の判定
 
@@ -161,17 +193,20 @@ src/
   main/       Electron の main プロセス
     index.ts    ウィンドウ・IPC・メニュー・通知
     pty.ts      node-pty でセッションごとの PTY を起動（Windows は ConPTY）
-    store.ts    セッション一覧の保存（userData/sessions.json）
+    store.ts    セッション・グループ・設定の保存（userData/sessions.json）
     rules.ts    判定ルールの読み込みと監視
   preload/    renderer に公開する API（window.nagaya）
   renderer/   React の画面
-    src/terminals.ts  セッションごとの xterm.js と状態の判定ループ（React の外で持つ）
+    src/terminals.ts  セッションごとの xterm.js、状態の判定ループ、自動再接続（React の外で持つ）
   shared/
     detect.ts   判定ロジック（純粋な関数。UI・Electron に依存しない）
+    layout.ts   サイドバーの並び替え（純粋な関数）
     types.ts / api.ts
 rules/        同梱の判定ルール
-test/         判定ロジックの単体テストとフィクスチャ
-scripts/      capture.mjs（画面の保存）、smoke.cjs（Xvfb 上の動作確認）
+test/         判定ロジック・並び替え・設定の読み込みの単体テストとフィクスチャ
+scripts/      capture.mjs（画面の保存）、smoke.cjs（Xvfb 上の動作確認）、make-icons.sh（アイコンの書き出し）
+build/        アイコンの元の絵と書き出したもの（配布物の作成に使う）
+resources/    実行中に使うファイル（ウィンドウのアイコン）
 ```
 
 - node-pty は main プロセスだけで使う。PTY の入出力は IPC で renderer とつなぐ
@@ -230,6 +265,7 @@ npm run typecheck
 ```
 
 `npm test` は [test/fixtures](test/fixtures) の下の画面テキストを、フォルダー名（期待する状態）と照らし合わせる。
+ほかに、サイドバーの並び替えと、保存ファイルの読み込み（古い版からの移し替えを含む）のテストがある。
 
 GUI のない Linux（コンテナなど）で、実際にアプリを起動して確かめるには Xvfb を使う:
 
@@ -237,7 +273,18 @@ GUI のない Linux（コンテナなど）で、実際にアプリを起動し�
 npm run build && xvfb-run -a npx electron --no-sandbox scripts/smoke.cjs <userData のフォルダー> shot.png 8000
 ```
 
-数秒後にスクリーンショットとサイドバーの状態を書き出して終わる。
+数秒後にスクリーンショットとサイドバーの状態を書き出して終わる。4つ目の引数に `explain`（判定の詳細を開く）か `js:<コード>`（ページで実行してから撮る。ドラッグ＆ドロップの確認など）を渡せる。
+
+### アイコン
+
+元の絵は [build/icon.svg](build/icon.svg)（大きいサイズ用）と [build/icon-small.svg](build/icon-small.svg)（32px 以下用。線を太く、点を大きくしてある）。
+屋根の下に、状態の色（黄・青・灰）の点が3つ並ぶ。直したら、次で PNG と ICO を書き出し直す（`rsvg-convert` と ImageMagick が要る）。
+
+```bash
+scripts/make-icons.sh
+```
+
+`build/icon.ico`（Windows）、`build/icon.png`（macOS・Linux）、`resources/icon.png`（実行中のウィンドウ）ができる。
 
 ### 配布物を作る
 
@@ -260,7 +307,6 @@ npm run dist:win:zip
 ## 未決事項・制限
 
 - **アプリを閉じると、中のセッションも終わる**（SSH が切れ、Claude Code も止まる）。閉じても動き続けるようにするには Linux 側でセッションを保持する必要がある（koya にセッション機能を足し、nagaya は開くたびにつなぎ直す案）。koya 側の変更が要るので別作業
-- アイコンは未設定（Electron の既定のもの）
 - コード署名はしていない。Windows では初回起動時に SmartScreen の警告が出る
 - 同梱のフィクスチャのうち `real-*` 以外は、Claude Code 2.x の画面を手で再現したもの。実際の画面で取り直すこと（[test/fixtures/README.md](test/fixtures/README.md)）
 

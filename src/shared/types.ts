@@ -8,22 +8,51 @@ export const STATE_LABEL: Record<AgentState, string> = {
   unknown: '不明',
 }
 
+/** サイドバーのグループ（利用者が自由に作る） */
+export interface SessionGroup {
+  id: string
+  name: string
+  /** 折りたたんでいるか */
+  collapsed: boolean
+}
+
 /** 保存されるセッションの設定 */
 export interface SessionConfig {
   id: string
   /** サイドバーに出す名前 */
   name: string
-  /** グループ化に使うホスト名（空ならローカル） */
+  /** 接続先のホスト名（表示と ssh コマンドのひな形に使う。空ならローカル） */
   host: string
+  /** 入っているグループ（null ならグループなし） */
+  groupId: string | null
   /** 実行するコマンド（空ならシェル） */
   command: string
   /** 作業ディレクトリ（空ならホーム） */
   cwd: string
   /** 判定ルールのエージェント名（rules/*.json の agent） */
   agent: string
+  /** SSH が切れた（終了コード 255）ときに自動で再接続するか */
+  autoReconnect: boolean
+  /** 再接続のときに使うコマンド（空なら command と同じ） */
+  reconnectCommand: string
 }
 
 export type NewSessionInput = Omit<SessionConfig, 'id'>
+
+/** サイドバーの並び（グループとセッション。どちらも配列の順に並ぶ） */
+export interface Layout {
+  groups: SessionGroup[]
+  sessions: SessionConfig[]
+}
+
+export type ThemeSetting = 'system' | 'light' | 'dark'
+
+export interface Settings {
+  theme: ThemeSetting
+}
+
+/** SSH が接続エラーで終わったときの終了コード */
+export const SSH_CONNECTION_ERROR = 255
 
 /** 判定ルールファイルの形（JSON） */
 export interface RuleSetFile {
