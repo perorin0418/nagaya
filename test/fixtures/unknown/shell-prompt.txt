@@ -1,0 +1,2 @@
+Last login: Mon Nov 16 09:12:44 2026 from 192.168.1.20
+[perorin@linux-a ~]$ 

@@ -1,0 +1,14 @@
+● 実装方針を確認させてください。
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ 方針
+
+ 認証トークンの保存先はどちらにしますか？
+
+ ❯ 1. Cookie
+      HttpOnly の Cookie に保存する
+   2. localStorage
+      ブラウザの localStorage に保存する
+   3. Type something.
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel

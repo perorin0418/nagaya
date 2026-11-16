@@ -1,0 +1,32 @@
+{
+  "agent": "claude",
+  "scanLines": 25,
+  "stableMs": 500,
+  "rules": [
+    {
+      "name": "選択肢（許可の確認・質問・フォルダーの信頼）",
+      "state": "blocked",
+      "anyOf": [
+        "^\\s*❯\\s*\\d+\\.\\s",
+        "Enter to select"
+      ]
+    },
+    {
+      "name": "作業中（esc to interrupt）",
+      "state": "working",
+      "anyOf": [
+        "esc to interrupt"
+      ],
+      "ignoreCase": true
+    },
+    {
+      "name": "入力欄",
+      "state": "idle",
+      "anyOf": [
+        "^\\s*│\\s*[>❯]",
+        "^\\s*[>❯](?:\\s(?!\\s*✔)|$)",
+        "\\? for shortcuts"
+      ]
+    }
+  ]
+}

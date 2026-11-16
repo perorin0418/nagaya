@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nagaya 画面イメージ</title>
+<style>
+:root {
+  --bg: #f7f6f2; --surface: #ffffff; --side: #f1efe8; --border: rgba(0,0,0,.12);
+  --text: #2c2c2a; --text2: #5f5e5a; --muted: #888780;
+  --hover: rgba(0,0,0,.05); --sel: rgba(0,0,0,.09);
+  --blue: #378add; --blue-bg: #e6f1fb; --blue-fg: #185fa5;
+  --amber: #ef9f27; --amber-bg: #faeeda; --amber-fg: #854f0b;
+  --term-bg: #ffffff; --mono: ui-monospace, "Cascadia Mono", Consolas, "Noto Sans Mono CJK JP", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1b; --surface: #232322; --side: #2a2a28; --border: rgba(255,255,255,.12);
+    --text: #e8e6df; --text2: #b4b2a9; --muted: #888780;
+    --hover: rgba(255,255,255,.06); --sel: rgba(255,255,255,.12);
+    --blue-bg: #0c447c; --blue-fg: #b5d4f4; --amber-bg: #633806; --amber-fg: #fac775;
+    --term-bg: #1a1a19;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--text);
+  font-family: system-ui, "Segoe UI", "Noto Sans JP", sans-serif; }
+.app { max-width: 960px; margin: 0 auto; display: grid; grid-template-columns: 220px minmax(0,1fr);
+  border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); height: 480px; }
+.side { background: var(--side); border-right: 1px solid var(--border); padding: 12px 8px; font-size: 14px; }
+.side-head { display: flex; justify-content: space-between; align-items: center; padding: 0 8px 6px; font-weight: 600; }
+.side-head button { border: 1px solid var(--border); background: transparent; color: var(--text2);
+  border-radius: 6px; width: 24px; height: 24px; cursor: pointer; }
+.host { color: var(--text2); font-size: 12px; margin: 12px 8px 4px; }
+.sess { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+.sess:hover { background: var(--hover); }
+.sess.sel { background: var(--sel); }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.st { margin-left: auto; font-size: 11px; color: var(--muted); }
+.main { display: flex; flex-direction: column; min-width: 0; }
+.bar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.bar .cmd { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.badge { margin-left: auto; font-size: 12px; padding: 2px 10px; border-radius: 6px; }
+.term { flex: 1; background: var(--term-bg); font-family: var(--mono); font-size: 13px; line-height: 1.6;
+  padding: 12px 16px; white-space: pre-wrap; overflow: hidden; }
+.legend { max-width: 960px; margin: 12px auto 0; font-size: 12px; color: var(--text2); display: flex; gap: 16px; flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 640px) { .app { grid-template-columns: 1fr; height: auto; } .side { border-right: 0; border-bottom: 1px solid var(--border); } .term { min-height: 280px; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="side">
+    <div class="side-head">セッション <button title="新しいセッション" aria-label="新しいセッション">+</button></div>
+    <div class="host">linux-a</div>
+    <div class="sess" data-i="0"><span class="dot" style="background:var(--amber)"></span>myapp<span class="st">blocked</span></div>
+    <div class="sess" data-i="1"><span class="dot" style="background:var(--blue)"></span>api<span class="st">working</span></div>
+    <div class="host">linux-b</div>
+    <div class="sess" data-i="2"><span class="dot" style="background:var(--muted)"></span>infra<span class="st">idle</span></div>
+    <div class="sess" data-i="3"><span class="dot" style="background:var(--blue)"></span>docs<span class="st">working</span></div>
+  </nav>
+  <section class="main">
+    <div class="bar"><strong id="ttl"></strong><span class="cmd" id="cmd"></span><span id="bdg" class="badge"></span></div>
+    <div class="term" id="term"></div>
+  </section>
+</div>
+<div class="legend">
+  <span><i class="dot" style="background:var(--amber)"></i>blocked（確認待ち・通知を出す）</span>
+  <span><i class="dot" style="background:var(--blue)"></i>working（作業中）</span>
+  <span><i class="dot" style="background:var(--muted)"></i>idle（入力待ち）</span>
+  <span>サイドバーをクリックすると右側の端末が切り替わります</span>
+</div>
+<script>
+const S = [
+  { t: 'linux-a / myapp', b: ['確認待ち', 'var(--amber-bg)', 'var(--amber-fg)'], o:
+"> テストが落ちている原因を調べて直して\n\n● Bash(npm test)\n  ⎿  3 failed, 41 passed\n\n● src/auth.ts を修正します\n\n Do you want to make this edit to auth.ts?\n ❯ 1. Yes\n   2. Yes, allow all edits this session\n   3. No, and tell Claude what to do differently" },
+  { t: 'linux-a / api', b: ['作業中', 'var(--blue-bg)', 'var(--blue-fg)'], o:
+"> エンドポイントにページングを追加して\n\n● Read(src/routes/items.ts)\n● Update(src/routes/items.ts)\n\n✻ Implementing… (esc to interrupt)" },
+  { t: 'linux-b / infra', b: ['入力待ち', 'var(--hover)', 'var(--text2)'], o:
+"> terraform plan の差分を要約して\n\n● 変更は 3 件です（追加 2、変更 1）。\n\n╭──────────────────────────────╮\n│ >                            │\n╰──────────────────────────────╯" },
+  { t: 'linux-b / docs', b: ['作業中', 'var(--blue-bg)', 'var(--blue-fg)'], o:
+"> README を英語に翻訳して\n\n● Write(README.en.md)\n\n✻ Writing… (esc to interrupt)" },
+];
+function show(i) {
+  const s = S[i];
+  document.querySelectorAll('.sess').forEach(e => e.classList.toggle('sel', +e.dataset.i === i));
+  document.getElementById('ttl').textContent = s.t;
+  document.getElementById('cmd').textContent = 'ssh ' + s.t.split(' / ')[0] + ' -t koya run claude -- claude';
+  const b = document.getElementById('bdg');
+  b.textContent = s.b[0]; b.style.background = s.b[1]; b.style.color = s.b[2];
+  document.getElementById('term').textContent = s.o;
+}
+document.querySelectorAll('.sess').forEach(e => e.addEventListener('click', () => show(+e.dataset.i)));
+show(0);
+</script>
+</body>
+</html>

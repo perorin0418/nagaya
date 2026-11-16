@@ -1,0 +1,30 @@
+..........................................................
+
+     *                                       █████▓▓░
+                                 *         ███▓░     ░░
+            ░░░░░░                        ███▓░
+    ░░░   ░░░░░░░░░░                      ███▓░
+   ░░░░░░░░░░░░░░░░░░░    *                ██▓░░      ▓
+                                             ░▓▓███▓▓░
+ *                                 ░░░░
+                                 ░░░░░░░░
+                               ░░░░░░░░░░░░░░░░
+       █████████                                        *
+      ██▄█████▄██                        *
+       █████████      *
+.......█ █   █ █..........................................
+
+ Browser didn't open? Use the url below to sign in (c to copy)
+
+https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&resp
+onse_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3A
+create_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user
+%3Afile_upload+user%3Aplugins+user%3Aprivacy_consents%3Awrite&code_challenge=rXJW-X8YdABJnJoVipu9gRs
+U34WV0SLynTObH84dwxQ&code_challenge_method=S256&state=l9FrKbbtlddp0_fx1Z6orIPZW9D6pItoI2n3O9E04RI
+
+ Hold Shift (Option in iTerm2, Fn in Terminal.app) while selecting to use your terminal's native
+ copy
+
+
+ Paste code here if prompted >
+

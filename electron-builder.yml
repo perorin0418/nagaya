@@ -1,0 +1,51 @@
+appId: io.github.perorin0418.nagaya
+productName: nagaya
+copyright: Copyright © 2026 perorin0418
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - package.json
+  - '!**/*.{md,map,pdb,ts,cc,h,gyp,gypi}'
+  - '!node_modules/node-pty/{src,deps,scripts,third_party,typings}/**'
+  - '!node_modules/node-pty/build/{Makefile,config.gypi,*.mk}'
+  - '!node_modules/node-pty/build/Release/{obj.target,.deps}/**'
+extraResources:
+  - from: rules
+    to: rules
+    filter: ['*.json']
+# node-pty はネイティブモジュールなので asar の外に出す
+asarUnpack:
+  - node_modules/node-pty/**
+# node-pty 1.1 は Windows・macOS 向けのビルド済みバイナリ（N-API）を同梱しているので、作り直さない
+npmRebuild: false
+win:
+  artifactName: ${productName}-${version}-win-x64.${ext}
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  files:
+    # Linux でビルドした node-pty のバイナリは入れない（prebuilds/win32-x64 を使う）
+    - '!node_modules/node-pty/build/**'
+    - '!node_modules/node-pty/prebuilds/{darwin,linux}-*/**'
+    - '!node_modules/node-pty/prebuilds/win32-arm64/**'
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-setup.${ext}
+  shortcutName: nagaya
+mac:
+  target: [dmg]
+  category: public.app-category.developer-tools
+  files:
+    - '!node_modules/node-pty/build/**'
+    - '!node_modules/node-pty/prebuilds/{win32,linux}-*/**'
+linux:
+  target: [AppImage]
+  category: Development
+  files:
+    - '!node_modules/node-pty/prebuilds/**'
