@@ -4,6 +4,8 @@ copyright: Copyright © 2026 perorin0418
 directories:
   output: dist
   buildResources: build
+# 入れるものだけを並べる。パターンが除外だけだと「全部」に足されてしまい、src・test などまで入るので、
+# 各 OS の files でも先頭に同じものを並べる
 files:
   - out/**
   - resources/**
@@ -31,6 +33,9 @@ win:
     - target: zip
       arch: [x64]
   files:
+    - out/**
+    - resources/**
+    - package.json
     # Linux でビルドした node-pty のバイナリは入れない（prebuilds/win32-x64 を使う）
     - '!node_modules/node-pty/build/**'
     - '!node_modules/node-pty/prebuilds/{darwin,linux}-*/**'
@@ -46,6 +51,9 @@ mac:
   target: [dmg]
   category: public.app-category.developer-tools
   files:
+    - out/**
+    - resources/**
+    - package.json
     - '!node_modules/node-pty/build/**'
     - '!node_modules/node-pty/prebuilds/{win32,linux}-*/**'
 linux:
@@ -53,4 +61,7 @@ linux:
   target: [AppImage]
   category: Development
   files:
+    - out/**
+    - resources/**
+    - package.json
     - '!node_modules/node-pty/prebuilds/**'
