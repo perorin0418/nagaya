@@ -11,6 +11,8 @@ interface Props {
   /** グループが1つ以上あるか（「グループなし」の見出しを出すか） */
   hasGroups: boolean
   states: Record<string, AgentState>
+  /** 未読のセッション */
+  unread: Record<string, true>
   conns: Record<string, ConnEvent>
   selectedId: string | null
   onSelect(id: string): void
@@ -116,6 +118,10 @@ export function Sidebar(p: Props) {
             'unknown',
           )
           const blocked = sec.sessions.filter((s) => p.states[s.id] === 'blocked').length
+          const unread = sec.sessions.filter((s) => p.unread[s.id]).length
+          const sum = [blocked > 0 ? `確認待ち ${blocked}` : '', unread > 0 ? `未読 ${unread}` : '']
+            .filter(Boolean)
+            .join('・')
           const headerMark = mark?.kind === 'group' && mark.id === key ? mark.pos : null
           return (
             <div key={key} className="group">
@@ -157,7 +163,7 @@ export function Sidebar(p: Props) {
                   {collapsed ? (
                     <span className="group-sum">
                       {worst !== 'unknown' ? <span className={`dot ${worst}`} /> : null}
-                      {blocked > 0 ? `確認待ち ${blocked}` : sec.sessions.length}
+                      {sum || sec.sessions.length}
                     </span>
                   ) : null}
                 </div>
@@ -173,7 +179,7 @@ export function Sidebar(p: Props) {
                   return (
                     <div
                       key={s.id}
-                      className={`sess${s.id === p.selectedId ? ' sel' : ''}${m ? ` drop-${m}` : ''}`}
+                      className={`sess${s.id === p.selectedId ? ' sel' : ''}${p.unread[s.id] ? ' unread' : ''}${m ? ` drop-${m}` : ''}`}
                       draggable
                       onDragStart={(e) => {
                         e.dataTransfer.setData(SESSION_MIME, s.id)
@@ -198,6 +204,7 @@ export function Sidebar(p: Props) {
                       <span className={`dot ${st}`} />
                       <span className="name">{s.name}</span>
                       {s.host ? <span className="host-tag">{s.host}</span> : null}
+                      {p.unread[s.id] ? <span className="unread-tag">未読</span> : null}
                       {status}
                     </div>
                   )

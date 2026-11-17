@@ -537,3 +537,21 @@ button:disabled {
 .buttons .reset {
   margin-right: auto;
 }
+
+/* ---- 未読 ---- */
+.sess.unread .name {
+  font-weight: 700;
+}
+.unread-tag {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--blue-fg);
+  background: var(--blue-bg);
+}
+.unread-tag + .st {
+  margin-left: 0;
+}

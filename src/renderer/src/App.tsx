@@ -35,6 +35,10 @@ export function App() {
   const [loaded, setLoaded] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [states, setStates] = useState<Record<string, AgentState>>({})
+  /** 見ていないあいだに作業が終わった・確認待ちになったセッション（選んで表示したら消える） */
+  const [unread, setUnread] = useState<Record<string, true>>({})
+  const statesRef = useRef<Record<string, AgentState>>({})
+  const selectedRef = useRef<string | null>(null)
   const [conns, setConns] = useState<Record<string, ConnEvent>>({})
   const [dialog, setDialog] = useState<DialogState>(null)
   const [explain, setExplain] = useState(false)
@@ -50,6 +54,15 @@ export function App() {
   const applySettings = useCallback((s: Settings) => {
     setFont(s.font)
     terminals.setFont(s.font)
+  }, [])
+
+  const markRead = useCallback((id: string | null) => {
+    if (!id) return
+    setUnread((u) => {
+      if (!u[id]) return u
+      const { [id]: _r, ...rest } = u
+      return rest
+    })
   }, [])
 
   const showToast = useCallback((msg: string) => {
@@ -78,7 +91,18 @@ export function App() {
       setAgents(terminals.agents)
       showToast(p.errors.length ? 'ルールを読み込みました（エラーあり）' : 'ルールを読み込みました')
     })
-    const offState = terminals.onState(({ id, state }) => setStates((s) => ({ ...s, [id]: state })))
+    const offState = terminals.onState(({ id, state }) => {
+      const prev = statesRef.current[id]
+      statesRef.current = { ...statesRef.current, [id]: state }
+      setStates(statesRef.current)
+      // 見ていないあいだに作業が終わった（作業中 → 入力待ち）・確認待ちになったら未読にする
+      const done = (state === 'idle' && prev === 'working') || (state === 'blocked' && prev !== 'blocked')
+      const watching = selectedRef.current === id && document.hasFocus()
+      if (done && !watching) setUnread((u) => ({ ...u, [id]: true }))
+    })
+    // ウィンドウに戻ってきたら、表示しているセッションは既読にする
+    const onFocus = (): void => markRead(selectedRef.current)
+    window.addEventListener('focus', onFocus)
     const offConn = terminals.onConn((ev) => setConns((c) => ({ ...c, [ev.id]: ev })))
     const offSelect = api.onSelectSession((id) => setSelectedId(id))
     const offSettings = api.onSettingsChanged(applySettings)
@@ -88,15 +112,18 @@ export function App() {
       offConn()
       offSelect()
       offSettings()
+      window.removeEventListener('focus', onFocus)
     }
-  }, [showToast, applySettings])
+  }, [showToast, applySettings, markRead])
 
   // 選択を main に知らせ、端末にフォーカスを移す
   useEffect(() => {
     if (!loaded) return
     api.reportSelected(selectedId)
+    selectedRef.current = selectedId
+    if (document.hasFocus()) markRead(selectedId)
     if (selectedId) requestAnimationFrame(() => terminals.focus(selectedId))
-  }, [selectedId, loaded])
+  }, [selectedId, loaded, markRead])
 
   const selected = sessions.find((s) => s.id === selectedId) ?? null
   const secs = useMemo(() => toSections(layout), [layout])
@@ -215,7 +242,12 @@ export function App() {
       case 'delete': {
         terminals.dispose(id)
         setLayout(await api.removeSession(id))
-        setStates(({ [id]: _s, ...rest }) => rest)
+        {
+          const { [id]: _s, ...rest } = statesRef.current
+          statesRef.current = rest
+          setStates(rest)
+        }
+        markRead(id)
         setConns(({ [id]: _c, ...rest }) => rest)
         if (selectedId === id) setSelectedId(ordered.find((s) => s.id !== id)?.id ?? null)
         break
@@ -242,6 +274,7 @@ export function App() {
         sections={secs}
         hasGroups={groups.length > 0}
         states={states}
+        unread={unread}
         conns={conns}
         selectedId={selectedId}
         onSelect={setSelectedId}
