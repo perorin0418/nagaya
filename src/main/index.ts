@@ -27,8 +27,11 @@ import icon from '../../resources/icon.png?asset'
 import { defaultShell, PtyManager } from './pty'
 import { RulesLoader } from './rules'
 import { SessionStore } from './store'
+import { UpdateChecker } from './update'
 
 const APP_ID = 'io.github.perorin0418.nagaya'
+/** 新しい版の通知を notifications に持つときのキー（タブの id とは重ならない） */
+const UPDATE_NOTIFICATION = 'update'
 
 // 2つ目を起動したら、1つ目のウィンドウを前に出して終わる（同じセッションが二重に起動しないように）
 if (!app.requestSingleInstanceLock()) {
@@ -51,6 +54,47 @@ function main(): void {
   const store = new SessionStore(join(app.getPath('userData'), 'sessions.json'))
   const bundledRules = app.isPackaged ? join(process.resourcesPath, 'rules') : join(app.getAppPath(), 'rules')
   const rules = new RulesLoader(bundledRules, join(app.getPath('userData'), 'rules'))
+
+  // 新しい版が出ていないか、GitHub のリリースを6時間ごとに確かめる
+  const updates = new UpdateChecker(app.getVersion(), (release) => {
+    buildMenu()
+    if (!Notification.isSupported()) return
+    const n = new Notification({
+      title: `nagaya ${release.version} が出ています`,
+      body: `今の版は ${app.getVersion()} です。クリックでリリースのページを開きます。`,
+    })
+    n.on('click', () => {
+      notifications.delete(UPDATE_NOTIFICATION)
+      void shell.openExternal(release.url)
+    })
+    n.on('close', () => {
+      if (notifications.get(UPDATE_NOTIFICATION) === n) notifications.delete(UPDATE_NOTIFICATION)
+    })
+    notifications.get(UPDATE_NOTIFICATION)?.close()
+    notifications.set(UPDATE_NOTIFICATION, n)
+    n.show()
+  })
+
+  /** 「更新を確認」をメニューから選んだとき。結果をダイアログで出す */
+  async function checkUpdateNow(): Promise<void> {
+    const r = await updates.check()
+    if (!win) return
+    if (r.type === 'newer') {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'info',
+        buttons: ['リリースのページを開く', '閉じる'],
+        defaultId: 0,
+        cancelId: 1,
+        message: `nagaya ${r.release.version} が出ています`,
+        detail: `今の版は ${app.getVersion()} です。`,
+      })
+      if (response === 0) void shell.openExternal(r.release.url)
+    } else if (r.type === 'latest') {
+      await dialog.showMessageBox(win, { type: 'info', message: '最新の版です', detail: `nagaya ${app.getVersion()}` })
+    } else {
+      await dialog.showMessageBox(win, { type: 'warning', message: '更新を確認できませんでした', detail: r.message })
+    }
+  }
 
   const send = (channel: string, ...args: unknown[]): void => {
     if (win && !win.isDestroyed()) win.webContents.send(channel, ...args)
@@ -220,6 +264,22 @@ function main(): void {
               void shell.openPath(rules.userDir)
             },
           },
+        ],
+      },
+      {
+        label: 'ヘルプ',
+        submenu: [
+          ...(updates.latest
+            ? [
+                {
+                  label: `nagaya ${updates.latest.version} を入手…`,
+                  click: () => void shell.openExternal(updates.latest!.url),
+                },
+              ]
+            : []),
+          { label: '更新を確認…', click: () => void checkUpdateNow() },
+          { type: 'separator' },
+          { label: `nagaya ${app.getVersion()}`, enabled: false },
         ],
       },
     ]
@@ -480,6 +540,7 @@ function main(): void {
     buildMenu()
     rules.watch((p) => send('rules:changed', p))
     createWindow()
+    updates.start()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -491,5 +552,8 @@ function main(): void {
     rules.close()
     if (process.platform !== 'darwin') app.quit()
   })
-  app.on('before-quit', () => ptys.killAll())
+  app.on('before-quit', () => {
+    updates.stop()
+    ptys.killAll()
+  })
 }
