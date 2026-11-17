@@ -8,6 +8,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { DEFAULT_FONT, fontFamilyCss } from '@shared/font'
+import { decodeOsc52 } from '@shared/osc52'
 import { compileRuleSet, detect, Stabilizer, type CompiledRuleSet, type DetectResult } from '@shared/detect'
 import {
   SSH_CONNECTION_ERROR,
@@ -270,6 +271,13 @@ class TerminalManager {
       }
     })
     term.attachCustomKeyEventHandler((ev) => this.handleKey(entry, ev))
+    // OSC 52（クリップボードへの書き込み）: Claude Code などマウス操作を受け取るアプリは、
+    // 自分で選択した範囲をこれで送ってくる。書き込みだけ受け、読み出し（?）には応じない
+    term.parser.registerOscHandler(52, (data) => {
+      const text = decodeOsc52(data)
+      if (text !== null) api.clipboardWrite(text)
+      return true
+    })
     // 選択しただけでコピーする。ドラッグは端末の外で離すこともあるので、離したのは window で受ける。
     // ダブルクリックの単語の選択は mouseup の後に決まるので dblclick でも受ける
     const copySelection = (): void => {
