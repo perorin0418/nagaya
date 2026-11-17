@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppInfo } from '@shared/api'
 import { sections as toSections } from '@shared/layout'
-import type { AgentState, Layout, NewSessionInput, SessionConfig, SessionGroup, ThemeSetting } from '@shared/types'
+import { DEFAULT_FONT } from '@shared/font'
+import type {
+  AgentState,
+  FontSetting,
+  Layout,
+  NewSessionInput,
+  SessionConfig,
+  SessionGroup,
+  Settings,
+} from '@shared/types'
+import { FontDialog } from './FontDialog'
 import { ExplainPanel } from './ExplainPanel'
 import { PromptDialog } from './PromptDialog'
 import { SessionDialog, type SessionDialogResult } from './SessionDialog'
@@ -17,6 +27,7 @@ type DialogState =
   | { kind: 'session'; mode: 'edit'; session: SessionConfig }
   | { kind: 'new-group'; moveSessionId?: string }
   | { kind: 'rename-group'; group: SessionGroup }
+  | { kind: 'font' }
   | null
 
 export function App() {
@@ -30,11 +41,16 @@ export function App() {
   const [ruleErrors, setRuleErrors] = useState<string[]>([])
   const [agents, setAgents] = useState<string[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
-  const [theme, setTheme] = useState<ThemeSetting>('system')
+  const [font, setFont] = useState<FontSetting>(DEFAULT_FONT)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const { sessions, groups } = layout
+
+  const applySettings = useCallback((s: Settings) => {
+    setFont(s.font)
+    terminals.setFont(s.font)
+  }, [])
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -46,7 +62,7 @@ export function App() {
   useEffect(() => {
     void (async () => {
       setInfo(await api.info())
-      setTheme((await api.getSettings()).theme)
+      applySettings(await api.getSettings())
       const rules = await api.getRules()
       terminals.setRules(rules)
       setRuleErrors(terminals.errors)
@@ -65,7 +81,7 @@ export function App() {
     const offState = terminals.onState(({ id, state }) => setStates((s) => ({ ...s, [id]: state })))
     const offConn = terminals.onConn((ev) => setConns((c) => ({ ...c, [ev.id]: ev })))
     const offSelect = api.onSelectSession((id) => setSelectedId(id))
-    const offSettings = api.onSettingsChanged((s) => setTheme(s.theme))
+    const offSettings = api.onSettingsChanged(applySettings)
     return () => {
       offRules()
       offState()
@@ -73,7 +89,7 @@ export function App() {
       offSelect()
       offSettings()
     }
-  }, [showToast])
+  }, [showToast, applySettings])
 
   // 選択を main に知らせ、端末にフォーカスを移す
   useEffect(() => {
@@ -135,6 +151,7 @@ export function App() {
         else if (action === 'save-screen') void saveScreen()
         else if (action === 'next-session') step(1)
         else if (action === 'prev-session') step(-1)
+        else if (action === 'font-settings') setDialog({ kind: 'font' })
       }),
     [saveScreen, step, newSession],
   )
@@ -227,7 +244,6 @@ export function App() {
         states={states}
         conns={conns}
         selectedId={selectedId}
-        theme={theme}
         onSelect={setSelectedId}
         onNewSession={() => newSession()}
         onNewGroup={() => setDialog({ kind: 'new-group' })}
@@ -236,7 +252,6 @@ export function App() {
         onToggleGroup={(g) => void api.setGroupCollapsed(g.id, !g.collapsed).then(setLayout)}
         onMoveSession={(id, groupId, beforeId) => void api.moveSession(id, groupId, beforeId).then(setLayout)}
         onMoveGroup={(id, beforeId) => void api.moveGroup(id, beforeId).then(setLayout)}
-        onTheme={(t) => void api.setTheme(t)}
         ruleErrors={ruleErrors}
         onOpenRules={() => void api.openRulesFolder()}
       />
@@ -317,6 +332,20 @@ export function App() {
           submitLabel="変更"
           onCancel={() => setDialog(null)}
           onSubmit={(name) => void submitGroup(name)}
+        />
+      ) : null}
+      {dialog?.kind === 'font' ? (
+        <FontDialog
+          initial={font}
+          onPreview={(f) => terminals.setFont(f)}
+          onCancel={() => {
+            terminals.setFont(font)
+            setDialog(null)
+          }}
+          onSubmit={(f) => {
+            setDialog(null)
+            void api.setFont(f)
+          }}
         />
       ) : null}
       {toast ? <div className="toast">{toast}</div> : null}

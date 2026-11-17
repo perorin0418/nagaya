@@ -6,8 +6,15 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { Terminal, type ITheme } from '@xterm/xterm'
+import { DEFAULT_FONT, fontFamilyCss } from '@shared/font'
 import { compileRuleSet, detect, Stabilizer, type CompiledRuleSet, type DetectResult } from '@shared/detect'
-import { SSH_CONNECTION_ERROR, type AgentState, type RulesPayload, type SessionConfig } from '@shared/types'
+import {
+  SSH_CONNECTION_ERROR,
+  type AgentState,
+  type FontSetting,
+  type RulesPayload,
+  type SessionConfig,
+} from '@shared/types'
 
 const api = window.nagaya
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -78,6 +85,7 @@ class TerminalManager {
   private detailListeners = new Set<Listener<{ id: string; result: DetectResult | null }>>()
   private connListeners = new Set<Listener<ConnEvent>>()
   private explainId: string | null = null
+  private font: FontSetting = { ...DEFAULT_FONT }
 
   constructor() {
     api.onPtyData((id, data) => {
@@ -92,6 +100,19 @@ class TerminalManager {
       for (const e of this.entries.values()) e.term.options.theme = theme()
     })
     setInterval(() => this.tick(), DETECT_INTERVAL_MS)
+  }
+
+  // ---- フォント ----
+
+  /** 端末のフォントを変える（開いている端末すべてに効く。桁数・行数も合わせ直す） */
+  setFont(font: FontSetting): void {
+    if (font.family === this.font.family && font.size === this.font.size) return
+    this.font = { ...font }
+    for (const e of this.entries.values()) {
+      e.term.options.fontFamily = fontFamilyCss(font.family)
+      e.term.options.fontSize = font.size
+      this.fitEntry(e)
+    }
   }
 
   // ---- ルール ----
@@ -195,8 +216,8 @@ class TerminalManager {
     el.className = 'term-inner'
     container.appendChild(el)
     const term = new Terminal({
-      fontFamily: '"Cascadia Mono", Consolas, "BIZ UDGothic", "MS Gothic", "Noto Sans Mono CJK JP", ui-monospace, monospace',
-      fontSize: 13,
+      fontFamily: fontFamilyCss(this.font.family),
+      fontSize: this.font.size,
       lineHeight: 1.15,
       cursorBlink: true,
       scrollback: 5000,

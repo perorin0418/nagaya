@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { DEFAULT_FONT, normalizeFont } from '@shared/font'
 import { moveGroup, moveSession, removeGroup } from '@shared/layout'
-import type { Layout, NewSessionInput, SessionConfig, SessionGroup, Settings, ThemeSetting } from '@shared/types'
+import type {
+  FontSetting,
+  Layout, NewSessionInput,
+  SessionConfig,
+  SessionGroup,
+  Settings,
+  ThemeSetting,
+} from '@shared/types'
 
 interface StoreFile {
   version: 2
@@ -16,7 +24,7 @@ const THEMES: ThemeSetting[] = ['system', 'light', 'dark']
 
 /** セッション一覧・グループ・設定を JSON ファイルに保存する */
 export class SessionStore {
-  private data: StoreFile = { version: 2, groups: [], sessions: [], selectedId: null, settings: { theme: 'system' } }
+  private data: StoreFile = { version: 2, groups: [], sessions: [], selectedId: null, settings: { theme: 'system', font: { ...DEFAULT_FONT } } }
 
   constructor(private readonly file: string) {
     this.load()
@@ -80,12 +88,17 @@ export class SessionStore {
   }
 
   get settings(): Settings {
-    return { ...this.data.settings }
+    return { ...this.data.settings, font: { ...this.data.settings.font } }
   }
 
   setTheme(theme: ThemeSetting): void {
     if (!THEMES.includes(theme)) return
     this.data.settings.theme = theme
+    this.save()
+  }
+
+  setFont(font: FontSetting): void {
+    this.data.settings.font = normalizeFont(font)
     this.save()
   }
 
@@ -207,6 +220,9 @@ export function parseStore(raw: Record<string, unknown>): StoreFile {
     groups,
     sessions: rawSessions.map((s) => normalizeSession(s, s.id, ids)),
     selectedId: typeof raw.selectedId === 'string' ? raw.selectedId : null,
-    settings: { theme: THEMES.includes(settings.theme as ThemeSetting) ? (settings.theme as ThemeSetting) : 'system' },
+    settings: {
+      theme: THEMES.includes(settings.theme as ThemeSetting) ? (settings.theme as ThemeSetting) : 'system',
+      font: normalizeFont(settings.font),
+    },
   }
 }

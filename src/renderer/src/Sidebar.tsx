@@ -1,6 +1,6 @@
 import { useState, type DragEvent, type ReactNode } from 'react'
 import type { SidebarSection } from '@shared/layout'
-import type { AgentState, SessionGroup, ThemeSetting } from '@shared/types'
+import type { AgentState, SessionGroup } from '@shared/types'
 import type { ConnEvent } from './terminals'
 
 const SESSION_MIME = 'application/x-nagaya-session'
@@ -13,7 +13,6 @@ interface Props {
   states: Record<string, AgentState>
   conns: Record<string, ConnEvent>
   selectedId: string | null
-  theme: ThemeSetting
   onSelect(id: string): void
   onNewSession(): void
   onNewGroup(): void
@@ -22,7 +21,6 @@ interface Props {
   onToggleGroup(g: SessionGroup): void
   onMoveSession(id: string, groupId: string | null, beforeId: string | null): void
   onMoveGroup(id: string, beforeId: string | null): void
-  onTheme(t: ThemeSetting): void
   ruleErrors: string[]
   onOpenRules(): void
 }
@@ -225,14 +223,6 @@ export function Sidebar(p: Props) {
         </div>
       ) : null}
       <div className="side-foot">
-        <label className="theme">
-          テーマ
-          <select value={p.theme} onChange={(e) => p.onTheme(e.target.value as ThemeSetting)}>
-            <option value="system">システム</option>
-            <option value="light">ライト</option>
-            <option value="dark">ダーク</option>
-          </select>
-        </label>
         <div>ドラッグで並べ替え</div>
       </div>
     </nav>

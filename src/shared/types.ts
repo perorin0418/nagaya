@@ -47,8 +47,17 @@ export interface Layout {
 
 export type ThemeSetting = 'system' | 'light' | 'dark'
 
+/** 端末のフォント */
+export interface FontSetting {
+  /** フォント名（カンマ区切りで複数可。空なら既定のフォント） */
+  family: string
+  /** 文字の大きさ（px） */
+  size: number
+}
+
 export interface Settings {
   theme: ThemeSetting
+  font: FontSetting
 }
 
 /** SSH が接続エラーで終わったときの終了コード */

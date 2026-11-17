@@ -37,7 +37,7 @@ const api: NagayaApi = {
   onRulesChanged: (cb) => on('rules:changed', cb),
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
-  setTheme: (theme) => ipcRenderer.invoke('settings:theme', theme),
+  setFont: (font) => ipcRenderer.invoke('settings:font', font),
   onSettingsChanged: (cb) => on('settings:changed', cb),
 
   reportState: (id, state) => ipcRenderer.send('state', id, state),

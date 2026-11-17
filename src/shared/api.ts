@@ -1,5 +1,6 @@
 import type {
   AgentState,
+  FontSetting,
   Layout,
   NewSessionInput,
   PtyExit,
@@ -7,7 +8,6 @@ import type {
   SessionConfig,
   SessionGroup,
   Settings,
-  ThemeSetting,
 } from './types'
 
 /** セッションの右クリックメニューで選ばれた操作（削除は確認済み） */
@@ -30,6 +30,7 @@ export type MenuAction =
   | 'save-screen'
   | 'next-session'
   | 'prev-session'
+  | 'font-settings'
 
 export interface AppInfo {
   platform: string
@@ -71,7 +72,7 @@ export interface NagayaApi {
   onRulesChanged(cb: (p: RulesPayload) => void): () => void
 
   getSettings(): Promise<Settings>
-  setTheme(theme: ThemeSetting): Promise<void>
+  setFont(font: FontSetting): Promise<void>
   onSettingsChanged(cb: (s: Settings) => void): () => void
 
   /** 確定した状態を main に知らせる（通知・タイトル用） */

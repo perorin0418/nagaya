@@ -13,7 +13,7 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron'
 import type { GroupMenuAction, SessionMenuAction } from '@shared/api'
-import type { AgentState, NewSessionInput, SessionConfig, ThemeSetting } from '@shared/types'
+import type { AgentState, FontSetting, NewSessionInput, SessionConfig, ThemeSetting } from '@shared/types'
 import icon from '../../resources/icon.png?asset'
 import { defaultShell, PtyManager } from './pty'
 import { RulesLoader } from './rules'
@@ -166,6 +166,7 @@ function main(): void {
               click: () => applyTheme(t),
             })),
           },
+          { label: '端末のフォント…', click: menu('font-settings') },
           { type: 'separator' },
           { role: 'resetZoom', label: '実際のサイズ' },
           { role: 'zoomIn', label: '拡大' },
@@ -354,7 +355,10 @@ function main(): void {
 
   // ---- 設定 ----
   ipcMain.handle('settings:get', () => store.settings)
-  ipcMain.handle('settings:theme', (_e, theme: ThemeSetting) => applyTheme(theme))
+  ipcMain.handle('settings:font', (_e, font: FontSetting) => {
+    store.setFont(font)
+    send('settings:changed', store.settings)
+  })
 
   ipcMain.handle('pty:start', (_e, id: string, cols: number, rows: number, reconnect: boolean) => {
     const cfg = store.get(id)
