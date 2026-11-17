@@ -241,21 +241,6 @@ button.icon svg {
   gap: 6px;
   border-top: 1px solid var(--border);
 }
-.side-foot .theme {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text2);
-  font-size: 12px;
-}
-.side-foot select {
-  font: inherit;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 2px 4px;
-}
 .rule-errors {
   font-size: 12px;
   color: var(--red-fg);
@@ -536,4 +521,167 @@ button:disabled {
   max-width: 60vw;
   z-index: 20;
   word-break: break-all;
+}
+
+/* ---- 端末のフォント ---- */
+.dialog .font-preview {
+  white-space: pre;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.15;
+}
+.buttons .reset {
+  margin-right: auto;
+}
+
+/* ---- 未読 ---- */
+.sess.unread .name {
+  font-weight: 700;
+}
+.unread-tag {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--blue-fg);
+  background: var(--blue-bg);
+}
+.unread-tag + .st {
+  margin-left: 0;
+}
+
+/* ---- タブ ---- */
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px 0;
+  /* 下の線は影で描く（選んでいるタブの背景で線を隠すため。はみ出しで縦のスクロールバーが出ないように） */
+  box-shadow: inset 0 -1px 0 var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex: none;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: none;
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab:hover {
+  background: var(--hover);
+}
+.tab.active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+.tab.unread .tab-name {
+  font-weight: 700;
+  color: var(--text);
+}
+.tab-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-host,
+.tab-conn {
+  font-size: 11px;
+  color: var(--muted);
+}
+.tab-conn.warn {
+  color: var(--amber-fg);
+}
+.unread-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--blue);
+  flex: none;
+}
+.tab-new {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 10px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.tab-new:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.tab-count {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: var(--text2);
+  border: 1px solid var(--border);
+}
+
+/* セッションにマウスを合わせたときの、タブごとの状態 */
+.tab-tip {
+  position: fixed;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) auto auto auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 4px;
+  padding: 8px 10px;
+  max-width: min(420px, calc(100vw - 240px));
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  pointer-events: none;
+}
+.tab-tip-row {
+  display: contents;
+}
+.tab-tip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-tip-host {
+  color: var(--muted);
+  font-size: 11px;
+}
+.tab-tip-state {
+  color: var(--text2);
+}
+.tab-tip-state.blocked {
+  color: var(--amber-fg);
+}
+.tab-tip-state.working {
+  color: var(--blue-fg);
+}
+.dialog .section-note {
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
 }

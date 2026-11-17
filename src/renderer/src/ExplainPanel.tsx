@@ -1,20 +1,20 @@
 import { useEffect, useState } from 'react'
 import type { DetectResult } from '@shared/detect'
-import type { AgentState, SessionConfig } from '@shared/types'
+import type { AgentState, TabConfig } from '@shared/types'
 import { terminals } from './terminals'
 
 /** 判定のデバッグ表示（herdr の agent explain に相当） */
-export function ExplainPanel({ session, committed }: { session: SessionConfig; committed: AgentState }) {
+export function ExplainPanel({ tab, committed }: { tab: TabConfig; committed: AgentState }) {
   const [result, setResult] = useState<DetectResult | null>(null)
 
-  useEffect(() => terminals.explain(session.id, ({ result }) => setResult(result)), [session.id])
+  useEffect(() => terminals.explain(tab.id, ({ result }) => setResult(result)), [tab.id])
 
   const hitRows = new Set(result?.hits.map((h) => h.row))
   return (
     <div className="explain">
       <div className="explain-head">
         <span>
-          ルール: <code>{session.agent || '（なし）'}</code>
+          ルール: <code>{tab.agent || '（なし）'}</code>
         </span>
         <span>
           今の判定: <code>{result?.state ?? 'unknown'}</code>
@@ -28,7 +28,7 @@ export function ExplainPanel({ session, committed }: { session: SessionConfig; c
       </div>
       {!result ? (
         <div className="explain-note">
-          {session.agent ? `ルール「${session.agent}」が読み込まれていません。` : 'このセッションは判定しません。'}
+          {tab.agent ? `ルール「${tab.agent}」が読み込まれていません。` : 'このタブは判定しません。'}
         </div>
       ) : (
         <>

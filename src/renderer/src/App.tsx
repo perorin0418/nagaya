@@ -1,40 +1,85 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppInfo } from '@shared/api'
+import { DEFAULT_FONT } from '@shared/font'
 import { sections as toSections } from '@shared/layout'
-import type { AgentState, Layout, NewSessionInput, SessionConfig, SessionGroup, ThemeSetting } from '@shared/types'
+import {
+  tabLabel,
+  type AgentState,
+  type FontSetting,
+  type Layout,
+  type SessionConfig,
+  type SessionGroup,
+  type Settings,
+  type TabConfig,
+} from '@shared/types'
 import { ExplainPanel } from './ExplainPanel'
+import { FontDialog } from './FontDialog'
 import { PromptDialog } from './PromptDialog'
-import { SessionDialog, type SessionDialogResult } from './SessionDialog'
+import { SessionDialog, type SessionDialogInitial, type SessionDialogMode, type SessionDialogResult } from './SessionDialog'
 import { Sidebar } from './Sidebar'
 import { StateBadge } from './StateBadge'
+import { TabBar } from './TabBar'
 import { TerminalSlot } from './TerminalSlot'
 import { terminals, type ConnEvent } from './terminals'
 
 const api = window.nagaya
 
 type DialogState =
-  | { kind: 'session'; mode: 'new' | 'duplicate'; initial: Partial<NewSessionInput> }
-  | { kind: 'session'; mode: 'edit'; session: SessionConfig }
+  | {
+      kind: 'session'
+      mode: SessionDialogMode
+      initial: SessionDialogInitial
+      /** edit・duplicate: 対象のセッション。tab-*: タブを足す・変えるセッション */
+      sessionId?: string
+      /** tab-edit: 変えるタブ。tab-new・tab-duplicate: このタブの後ろに足す */
+      tabId?: string
+    }
   | { kind: 'new-group'; moveSessionId?: string }
   | { kind: 'rename-group'; group: SessionGroup }
+  | { kind: 'font' }
   | null
+
+/** タブの設定から、ダイアログの初期値にする部分 */
+const tabInput = ({ id: _id, ...rest }: TabConfig) => rest
 
 export function App() {
   const [layout, setLayout] = useState<Layout>({ groups: [], sessions: [] })
   const [loaded, setLoaded] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  /** セッションごとに表示しているタブ（なければ最初のタブ。保存しない） */
+  const [activeTabs, setActiveTabs] = useState<Record<string, string>>({})
+  /** タブごとの状態（キーはタブの id） */
   const [states, setStates] = useState<Record<string, AgentState>>({})
+  /** 見ていないあいだに作業が終わった・確認待ちになったタブ（表示したら消える） */
+  const [unread, setUnread] = useState<Record<string, true>>({})
+  const statesRef = useRef<Record<string, AgentState>>({})
+  /** 表示しているタブ */
+  const selectedTabRef = useRef<string | null>(null)
   const [conns, setConns] = useState<Record<string, ConnEvent>>({})
   const [dialog, setDialog] = useState<DialogState>(null)
   const [explain, setExplain] = useState(false)
   const [ruleErrors, setRuleErrors] = useState<string[]>([])
   const [agents, setAgents] = useState<string[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
-  const [theme, setTheme] = useState<ThemeSetting>('system')
+  const [font, setFont] = useState<FontSetting>(DEFAULT_FONT)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const { sessions, groups } = layout
+
+  const applySettings = useCallback((s: Settings) => {
+    setFont(s.font)
+    terminals.setFont(s.font)
+  }, [])
+
+  const markRead = useCallback((tabId: string | null) => {
+    if (!tabId) return
+    setUnread((u) => {
+      if (!u[tabId]) return u
+      const { [tabId]: _r, ...rest } = u
+      return rest
+    })
+  }, [])
 
   const showToast = useCallback((msg: string) => {
     setToast(msg)
@@ -42,11 +87,17 @@ export function App() {
     toastTimer.current = window.setTimeout(() => setToast(null), 4000)
   }, [])
 
+  /** セッション（とタブ）を表示する */
+  const show = useCallback((sessionId: string, tabId?: string | null) => {
+    setSelectedId(sessionId)
+    if (tabId) setActiveTabs((a) => (a[sessionId] === tabId ? a : { ...a, [sessionId]: tabId }))
+  }, [])
+
   // 起動時: ルール・設定・セッション一覧を読む
   useEffect(() => {
     void (async () => {
       setInfo(await api.info())
-      setTheme((await api.getSettings()).theme)
+      applySettings(await api.getSettings())
       const rules = await api.getRules()
       terminals.setRules(rules)
       setRuleErrors(terminals.errors)
@@ -62,27 +113,45 @@ export function App() {
       setAgents(terminals.agents)
       showToast(p.errors.length ? 'ルールを読み込みました（エラーあり）' : 'ルールを読み込みました')
     })
-    const offState = terminals.onState(({ id, state }) => setStates((s) => ({ ...s, [id]: state })))
+    const offState = terminals.onState(({ id, state }) => {
+      const prev = statesRef.current[id]
+      statesRef.current = { ...statesRef.current, [id]: state }
+      setStates(statesRef.current)
+      // 見ていないあいだに作業が終わった（作業中 → 入力待ち）・確認待ちになったら未読にする
+      const done = (state === 'idle' && prev === 'working') || (state === 'blocked' && prev !== 'blocked')
+      const watching = selectedTabRef.current === id && document.hasFocus()
+      if (done && !watching) setUnread((u) => ({ ...u, [id]: true }))
+    })
+    // ウィンドウに戻ってきたら、表示しているタブは既読にする
+    const onFocus = (): void => markRead(selectedTabRef.current)
+    window.addEventListener('focus', onFocus)
     const offConn = terminals.onConn((ev) => setConns((c) => ({ ...c, [ev.id]: ev })))
-    const offSelect = api.onSelectSession((id) => setSelectedId(id))
-    const offSettings = api.onSettingsChanged((s) => setTheme(s.theme))
+    const offSelect = api.onSelectSession((sessionId, tabId) => show(sessionId, tabId))
+    const offSettings = api.onSettingsChanged(applySettings)
     return () => {
       offRules()
       offState()
       offConn()
       offSelect()
       offSettings()
+      window.removeEventListener('focus', onFocus)
     }
-  }, [showToast])
+  }, [showToast, applySettings, markRead, show])
+
+  const selected = sessions.find((s) => s.id === selectedId) ?? null
+  const activeTab = (s: SessionConfig): TabConfig => s.tabs.find((t) => t.id === activeTabs[s.id]) ?? s.tabs[0]
+  const tab = selected ? activeTab(selected) : null
+  const tabId = tab?.id ?? null
 
   // 選択を main に知らせ、端末にフォーカスを移す
   useEffect(() => {
     if (!loaded) return
-    api.reportSelected(selectedId)
-    if (selectedId) requestAnimationFrame(() => terminals.focus(selectedId))
-  }, [selectedId, loaded])
+    api.reportSelected(selectedId, tabId)
+    selectedTabRef.current = tabId
+    if (document.hasFocus()) markRead(tabId)
+    if (tabId) requestAnimationFrame(() => terminals.focus(tabId))
+  }, [selectedId, tabId, loaded, markRead])
 
-  const selected = sessions.find((s) => s.id === selectedId) ?? null
   const secs = useMemo(() => toSections(layout), [layout])
 
   // サイドバーと同じ並びで前後のセッションへ（折りたたんだグループの中も含める）
@@ -94,6 +163,16 @@ export function App() {
       setSelectedId(ordered[(i + d + ordered.length) % ordered.length].id)
     },
     [ordered, selectedId],
+  )
+
+  // 前後のタブへ
+  const stepTab = useCallback(
+    (d: number) => {
+      if (!selected || !tabId || selected.tabs.length < 2) return
+      const i = selected.tabs.findIndex((t) => t.id === tabId)
+      show(selected.id, selected.tabs[(i + d + selected.tabs.length) % selected.tabs.length].id)
+    },
+    [selected, tabId, show],
   )
 
   // 選んだセッションが折りたたんだグループの中なら開く（通知のクリックなどで選ばれたとき）。
@@ -116,14 +195,32 @@ export function App() {
     [selected],
   )
 
+  /** タブを足すダイアログ（表示しているタブの設定を写しておく。名前は空にする） */
+  const newTab = useCallback(
+    (s: SessionConfig | null) => {
+      if (!s) return
+      const from = activeTab(s)
+      setDialog({
+        kind: 'session',
+        mode: 'tab-new',
+        initial: { tab: { ...tabInput(from), name: '' } },
+        sessionId: s.id,
+        tabId: from.id,
+      })
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTabs],
+  )
+
   const saveScreen = useCallback(async () => {
-    if (!selected) return
-    const text = terminals.screenLines(selected.id).join('\n').replace(/\s+$/, '') + '\n'
+    if (!selected || !tab) return
+    const text = terminals.screenLines(tab.id).join('\n').replace(/\s+$/, '') + '\n'
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)
-    const guess = terminals.candidate(selected.id)
-    const path = await api.saveScreen(`${guess}-${selected.name}-${stamp}.txt`, text)
+    const guess = terminals.candidate(tab.id)
+    const name = selected.tabs.length > 1 ? `${selected.name}-${tabLabel(tab)}` : selected.name
+    const path = await api.saveScreen(`${guess}-${name}-${stamp}.txt`, text)
     if (path) showToast(`保存しました: ${path}`)
-  }, [selected, showToast])
+  }, [selected, tab, showToast])
 
   // メニュー・ショートカット
   useEffect(
@@ -131,34 +228,70 @@ export function App() {
       api.onMenu((action) => {
         if (action === 'new-session') newSession()
         else if (action === 'new-group') setDialog({ kind: 'new-group' })
+        else if (action === 'new-tab') newTab(selected)
         else if (action === 'toggle-explain') setExplain((v) => !v)
         else if (action === 'save-screen') void saveScreen()
         else if (action === 'next-session') step(1)
         else if (action === 'prev-session') step(-1)
+        else if (action === 'next-tab') stepTab(1)
+        else if (action === 'prev-tab') stepTab(-1)
+        else if (action === 'font-settings') setDialog({ kind: 'font' })
       }),
-    [saveScreen, step, newSession],
+    [saveScreen, step, stepTab, newSession, newTab, selected],
   )
+
+  /** タブを忘れる（端末を閉じ、状態・未読・接続を消す） */
+  function forgetTabs(ids: string[]) {
+    if (ids.length === 0) return
+    const drop = <T,>(r: Record<string, T>): Record<string, T> => {
+      const next = { ...r }
+      for (const id of ids) delete next[id]
+      return next
+    }
+    for (const id of ids) terminals.dispose(id)
+    statesRef.current = drop(statesRef.current)
+    setStates(statesRef.current)
+    setUnread(drop)
+    setConns(drop)
+  }
 
   async function submitSession(r: SessionDialogResult) {
     if (dialog?.kind !== 'session') return
-    let input = r.input
-    if (r.newGroupName) {
-      const { group } = await api.createGroup(r.newGroupName)
-      input = { ...input, groupId: group.id }
+    let groupId = r.groupId
+    if (r.newGroupName) groupId = (await api.createGroup(r.newGroupName)).group.id
+    const meta = { name: r.name, groupId }
+    switch (dialog.mode) {
+      case 'new': {
+        const { session, layout } = await api.createSession({ ...meta, tab: r.tab })
+        setLayout(layout)
+        setSelectedId(session.id)
+        break
+      }
+      case 'edit':
+        setLayout(await api.updateSession(dialog.sessionId!, meta))
+        break
+      case 'duplicate': {
+        const { session, layout } = await api.duplicateSession(dialog.sessionId!, meta)
+        setLayout(layout)
+        setSelectedId(session.id)
+        break
+      }
+      case 'tab-new':
+      case 'tab-duplicate': {
+        const { tab, layout } = await api.addTab(dialog.sessionId!, r.tab, dialog.tabId ?? null)
+        setLayout(layout)
+        show(dialog.sessionId!, tab.id)
+        break
+      }
+      case 'tab-edit': {
+        const prev = sessions.flatMap((s) => s.tabs).find((t) => t.id === dialog.tabId)
+        setLayout(await api.updateTab({ ...r.tab, id: dialog.tabId! }))
+        if (prev && (prev.command !== r.tab.command || prev.cwd !== r.tab.cwd))
+          showToast('コマンド・作業ディレクトリの変更は、タブの右クリック →「再起動」で反映されます')
+        break
+      }
     }
-    if (dialog.mode === 'edit') {
-      const prev = dialog.session
-      const cfg = { ...prev, ...input }
-      setLayout(await api.updateSession(cfg))
-      setDialog(null)
-      const changed = cfg.command !== prev.command || cfg.cwd !== prev.cwd
-      if (changed) showToast('コマンド・作業ディレクトリの変更は、右クリック →「再起動」で反映されます')
-    } else {
-      const { session, layout } = await api.createSession(input)
-      setLayout(layout)
-      setSelectedId(session.id)
-      setDialog(null)
-    }
+    setDialog(null)
   }
 
   async function submitGroup(name: string) {
@@ -177,17 +310,18 @@ export function App() {
     if (!cfg || !action) return
     switch (action.type) {
       case 'edit':
-        setDialog({ kind: 'session', mode: 'edit', session: cfg })
+        setDialog({ kind: 'session', mode: 'edit', initial: { name: cfg.name, groupId: cfg.groupId }, sessionId: id })
         break
-      case 'duplicate': {
-        // 同じ作業を別のホストでも動かすため。名前・グループ・コマンドなどを写し、ホストは入れ直してもらう
-        const { id: _id, ...rest } = cfg
-        setDialog({ kind: 'session', mode: 'duplicate', initial: rest })
+      case 'duplicate':
+        setDialog({ kind: 'session', mode: 'duplicate', initial: { name: cfg.name, groupId: cfg.groupId }, sessionId: id })
         break
-      }
+      case 'new-tab':
+        setSelectedId(id)
+        newTab(cfg)
+        break
       case 'restart':
         setSelectedId(id)
-        await terminals.restart(id)
+        for (const t of cfg.tabs) await terminals.restart(t.id)
         break
       case 'move':
         setLayout(await api.moveSession(id, action.groupId, null))
@@ -196,11 +330,42 @@ export function App() {
         setDialog({ kind: 'new-group', moveSessionId: id })
         break
       case 'delete': {
-        terminals.dispose(id)
+        forgetTabs(cfg.tabs.map((t) => t.id))
         setLayout(await api.removeSession(id))
-        setStates(({ [id]: _s, ...rest }) => rest)
-        setConns(({ [id]: _c, ...rest }) => rest)
+        setActiveTabs(({ [id]: _a, ...rest }) => rest)
         if (selectedId === id) setSelectedId(ordered.find((s) => s.id !== id)?.id ?? null)
+        break
+      }
+    }
+  }
+
+  async function tabMenu(session: SessionConfig, t: TabConfig) {
+    const action = await api.tabMenu(t.id)
+    if (!action) return
+    switch (action.type) {
+      case 'edit':
+        setDialog({ kind: 'session', mode: 'tab-edit', initial: { tab: tabInput(t) }, sessionId: session.id, tabId: t.id })
+        break
+      case 'duplicate':
+        setDialog({
+          kind: 'session',
+          mode: 'tab-duplicate',
+          initial: { tab: tabInput(t) },
+          sessionId: session.id,
+          tabId: t.id,
+        })
+        break
+      case 'restart':
+        show(session.id, t.id)
+        await terminals.restart(t.id)
+        break
+      case 'close': {
+        // 閉じたタブを表示していたら、隣のタブへ
+        const i = session.tabs.findIndex((x) => x.id === t.id)
+        const next = session.tabs[i + 1] ?? session.tabs[i - 1]
+        if (activeTab(session).id === t.id && next) show(session.id, next.id)
+        forgetTabs([t.id])
+        setLayout(await api.removeTab(t.id))
         break
       }
     }
@@ -215,8 +380,8 @@ export function App() {
     else if (action.type === 'delete') setLayout(await api.removeGroup(id))
   }
 
-  const state: AgentState = selected ? (states[selected.id] ?? 'unknown') : 'unknown'
-  const conn = selected ? conns[selected.id] : undefined
+  const state: AgentState = tab ? (states[tab.id] ?? 'unknown') : 'unknown'
+  const conn = tab ? conns[tab.id] : undefined
   const group = selected?.groupId ? groups.find((g) => g.id === selected.groupId) : undefined
 
   return (
@@ -225,9 +390,9 @@ export function App() {
         sections={secs}
         hasGroups={groups.length > 0}
         states={states}
+        unread={unread}
         conns={conns}
         selectedId={selectedId}
-        theme={theme}
         onSelect={setSelectedId}
         onNewSession={() => newSession()}
         onNewGroup={() => setDialog({ kind: 'new-group' })}
@@ -236,49 +401,60 @@ export function App() {
         onToggleGroup={(g) => void api.setGroupCollapsed(g.id, !g.collapsed).then(setLayout)}
         onMoveSession={(id, groupId, beforeId) => void api.moveSession(id, groupId, beforeId).then(setLayout)}
         onMoveGroup={(id, beforeId) => void api.moveGroup(id, beforeId).then(setLayout)}
-        onTheme={(t) => void api.setTheme(t)}
         ruleErrors={ruleErrors}
         onOpenRules={() => void api.openRulesFolder()}
       />
       <section className="main">
-        {selected ? (
-          <div className="bar">
-            <strong className="title">
-              {group ? <span className="title-group">{group.name} / </span> : null}
-              {selected.host ? `${selected.host} / ` : ''}
-              {selected.name}
-            </strong>
-            <span className="cmd" title={selected.command || info?.defaultShell}>
-              {selected.command || info?.defaultShell}
-            </span>
-            <span className="bar-actions">
-              <button
-                className={`tool${explain ? ' on' : ''}`}
-                onClick={() => setExplain((v) => !v)}
-                title="判定に使った行と当たったルールを表示（Ctrl+Shift+D）"
-              >
-                判定の詳細
-              </button>
-              <button className="tool" onClick={() => void saveScreen()} title="今の画面をテキストで保存（Ctrl+Shift+S）">
-                画面を保存
-              </button>
-            </span>
-            {conn?.status === 'reconnecting' ? (
-              <span className="badge reconnecting" title="Enter ですぐに再接続、Esc で中止">
-                再接続中（{conn.attempt} 回目）
+        {selected && tab ? (
+          <>
+            <div className="bar">
+              <strong className="title">
+                {group ? <span className="title-group">{group.name} / </span> : null}
+                {tab.host ? `${tab.host} / ` : ''}
+                {selected.name}
+              </strong>
+              <span className="cmd" title={tab.command || info?.defaultShell}>
+                {tab.command || info?.defaultShell}
               </span>
-            ) : conn?.status === 'exited' ? (
-              <span className="badge unknown">終了</span>
-            ) : (
-              <StateBadge state={state} />
-            )}
-          </div>
+              <span className="bar-actions">
+                <button
+                  className={`tool${explain ? ' on' : ''}`}
+                  onClick={() => setExplain((v) => !v)}
+                  title="判定に使った行と当たったルールを表示（Ctrl+Shift+D）"
+                >
+                  判定の詳細
+                </button>
+                <button className="tool" onClick={() => void saveScreen()} title="今の画面をテキストで保存（Ctrl+Shift+S）">
+                  画面を保存
+                </button>
+              </span>
+              {conn?.status === 'reconnecting' ? (
+                <span className="badge reconnecting" title="Enter ですぐに再接続、Esc で中止">
+                  再接続中（{conn.attempt} 回目）
+                </span>
+              ) : conn?.status === 'exited' ? (
+                <span className="badge unknown">終了</span>
+              ) : (
+                <StateBadge state={state} />
+              )}
+            </div>
+            <TabBar
+              tabs={selected.tabs}
+              activeId={tab.id}
+              states={states}
+              unread={unread}
+              conns={conns}
+              onSelect={(id) => show(selected.id, id)}
+              onMenu={(t) => void tabMenu(selected, t)}
+              onNew={() => newTab(selected)}
+            />
+          </>
         ) : null}
-        {selected && explain ? <ExplainPanel session={selected} committed={state} /> : null}
+        {tab && explain ? <ExplainPanel tab={tab} committed={state} /> : null}
         <div className="terms">
-          {sessions.map((s) => (
-            <TerminalSlot key={s.id} session={s} visible={s.id === selectedId} />
-          ))}
+          {sessions.flatMap((s) =>
+            s.tabs.map((t) => <TerminalSlot key={t.id} tab={t} visible={s.id === selectedId && t.id === tabId} />),
+          )}
           {loaded && sessions.length === 0 ? (
             <div className="empty">
               <p>セッションがありません。</p>
@@ -292,7 +468,7 @@ export function App() {
       {dialog?.kind === 'session' ? (
         <SessionDialog
           mode={dialog.mode}
-          initial={dialog.mode === 'edit' ? dialog.session : dialog.initial}
+          initial={dialog.initial}
           groups={groups}
           agents={agents}
           defaultShell={info?.defaultShell ?? ''}
@@ -317,6 +493,20 @@ export function App() {
           submitLabel="変更"
           onCancel={() => setDialog(null)}
           onSubmit={(name) => void submitGroup(name)}
+        />
+      ) : null}
+      {dialog?.kind === 'font' ? (
+        <FontDialog
+          initial={font}
+          onPreview={(f) => terminals.setFont(f)}
+          onCancel={() => {
+            terminals.setFont(font)
+            setDialog(null)
+          }}
+          onSubmit={(f) => {
+            setDialog(null)
+            void api.setFont(f)
+          }}
         />
       ) : null}
       {toast ? <div className="toast">{toast}</div> : null}

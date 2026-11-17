@@ -1,13 +1,21 @@
 /**
- * セッションごとの xterm.js を React の外で持つ。
+ * タブごとの xterm.js を React の外で持つ（id はタブの id）。
  * 選択を切り替えても端末と PTY は生かしたまま、表示だけを切り替える。
  * 状態の判定もここで行う（非表示のセッションも判定を続ける）。
  */
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
+import { DEFAULT_FONT, fontFamilyCss } from '@shared/font'
 import { compileRuleSet, detect, Stabilizer, type CompiledRuleSet, type DetectResult } from '@shared/detect'
-import { SSH_CONNECTION_ERROR, type AgentState, type RulesPayload, type SessionConfig } from '@shared/types'
+import {
+  SSH_CONNECTION_ERROR,
+  type AgentState,
+  type FontSetting,
+  type RulesPayload,
+  type TabConfig,
+} from '@shared/types'
 
 const api = window.nagaya
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -48,7 +56,7 @@ export interface ConnEvent {
 
 interface Entry {
   id: string
-  cfg: SessionConfig
+  cfg: TabConfig
   term: Terminal
   fit: FitAddon
   el: HTMLDivElement
@@ -70,6 +78,11 @@ export interface StateEvent {
 
 type Listener<T> = (v: T) => void
 
+/** リンクをブラウザで開く（メイン側の setWindowOpenHandler が既定のブラウザに渡す） */
+function openLink(uri: string): void {
+  window.open(uri)
+}
+
 class TerminalManager {
   private entries = new Map<string, Entry>()
   private ruleSets = new Map<string, CompiledRuleSet>()
@@ -78,6 +91,7 @@ class TerminalManager {
   private detailListeners = new Set<Listener<{ id: string; result: DetectResult | null }>>()
   private connListeners = new Set<Listener<ConnEvent>>()
   private explainId: string | null = null
+  private font: FontSetting = { ...DEFAULT_FONT }
 
   constructor() {
     api.onPtyData((id, data) => {
@@ -92,6 +106,19 @@ class TerminalManager {
       for (const e of this.entries.values()) e.term.options.theme = theme()
     })
     setInterval(() => this.tick(), DETECT_INTERVAL_MS)
+  }
+
+  // ---- フォント ----
+
+  /** 端末のフォントを変える（開いている端末すべてに効く。桁数・行数も合わせ直す） */
+  setFont(font: FontSetting): void {
+    if (font.family === this.font.family && font.size === this.font.size) return
+    this.font = { ...font }
+    for (const e of this.entries.values()) {
+      e.term.options.fontFamily = fontFamilyCss(font.family)
+      e.term.options.fontSize = font.size
+      this.fitEntry(e)
+    }
   }
 
   // ---- ルール ----
@@ -184,7 +211,7 @@ class TerminalManager {
   // ---- 端末 ----
 
   /** 端末を作って container に置き、PTY を起動する（作成済みなら置き直すだけ） */
-  attach(cfg: SessionConfig, container: HTMLElement): void {
+  attach(cfg: TabConfig, container: HTMLElement): void {
     const id = cfg.id
     let e = this.entries.get(id)
     if (e) {
@@ -195,18 +222,21 @@ class TerminalManager {
     el.className = 'term-inner'
     container.appendChild(el)
     const term = new Terminal({
-      fontFamily: '"Cascadia Mono", Consolas, "BIZ UDGothic", "MS Gothic", "Noto Sans Mono CJK JP", ui-monospace, monospace',
-      fontSize: 13,
+      fontFamily: fontFamilyCss(this.font.family),
+      fontSize: this.font.size,
       lineHeight: 1.15,
       cursorBlink: true,
       scrollback: 5000,
       allowProposedApi: true,
       theme: theme(),
       macOptionIsMeta: true,
+      // OSC 8 のハイパーリンク（既定の処理は空のウィンドウを開いてから移るため、ブラウザに URL が渡らない）
+      linkHandler: { activate: (_e, uri) => openLink(uri) },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.loadAddon(new Unicode11Addon())
+    term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri))) // 文字のままの URL もクリックで開く
     term.unicode.activeVersion = '11' // 日本語・絵文字の幅を Claude Code の想定に合わせる
     term.open(el)
 
@@ -240,6 +270,16 @@ class TerminalManager {
       }
     })
     term.attachCustomKeyEventHandler((ev) => this.handleKey(entry, ev))
+    // 選択しただけでコピーする。ドラッグは端末の外で離すこともあるので、離したのは window で受ける。
+    // ダブルクリックの単語の選択は mouseup の後に決まるので dblclick でも受ける
+    const copySelection = (): void => {
+      if (term.hasSelection()) api.clipboardWrite(term.getSelection())
+    }
+    el.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0) return
+      window.addEventListener('mouseup', copySelection, { once: true })
+    })
+    el.addEventListener('dblclick', copySelection)
     el.addEventListener('contextmenu', (ev) => {
       // 右クリック: 選択があればコピー、なければ貼り付け（Windows Terminal と同じ）
       ev.preventDefault()
@@ -334,8 +374,8 @@ class TerminalManager {
     await this.start(id)
   }
 
-  /** セッションの設定が変わったとき（ルール・自動再接続など） */
-  updateConfig(cfg: SessionConfig): void {
+  /** タブの設定が変わったとき（ルール・自動再接続など） */
+  updateConfig(cfg: TabConfig): void {
     const e = this.entries.get(cfg.id)
     if (!e) return
     e.cfg = cfg

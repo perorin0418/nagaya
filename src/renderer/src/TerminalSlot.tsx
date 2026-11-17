@@ -1,21 +1,21 @@
 import { useEffect, useRef } from 'react'
-import type { SessionConfig } from '@shared/types'
+import type { TabConfig } from '@shared/types'
 import { terminals } from './terminals'
 
 /**
- * 1セッション分の端末の置き場。全セッション分を重ねて置き、選択中のものだけ見せる。
+ * タブ1枚分の端末の置き場。全タブ分を重ねて置き、表示しているタブだけ見せる。
  * （display: none にすると大きさが測れず、裏の PTY の大きさが合わなくなるので visibility で隠す）
  */
-export function TerminalSlot({ session, visible }: { session: SessionConfig; visible: boolean }) {
+export function TerminalSlot({ tab, visible }: { tab: TabConfig; visible: boolean }) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (ref.current) terminals.attach(session, ref.current)
+    if (ref.current) terminals.attach(tab, ref.current)
     // 削除のときは App 側で terminals.dispose を呼ぶ
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id])
+  }, [tab.id])
 
-  useEffect(() => terminals.updateConfig(session), [session])
+  useEffect(() => terminals.updateConfig(tab), [tab])
 
   return <div ref={ref} className={`term-slot${visible ? ' visible' : ''}`} aria-hidden={!visible} />
 }

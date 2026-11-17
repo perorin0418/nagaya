@@ -12,8 +12,17 @@ import {
   shell,
   type MenuItemConstructorOptions,
 } from 'electron'
-import type { GroupMenuAction, SessionMenuAction } from '@shared/api'
-import type { AgentState, NewSessionInput, SessionConfig, ThemeSetting } from '@shared/types'
+import type { GroupMenuAction, SessionMenuAction, TabMenuAction } from '@shared/api'
+import {
+  tabLabel,
+  type AgentState,
+  type FontSetting,
+  type NewSessionInput,
+  type NewTabInput,
+  type SessionMeta,
+  type TabConfig,
+  type ThemeSetting,
+} from '@shared/types'
 import icon from '../../resources/icon.png?asset'
 import { defaultShell, PtyManager } from './pty'
 import { RulesLoader } from './rules'
@@ -32,13 +41,14 @@ function main(): void {
   if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
   let win: BrowserWindow | null = null
-  let selectedId: string | null = null
+  /** 表示しているタブ（通知を出すかの判断に使う） */
+  let selectedTabId: string | null = null
+  /** タブごとの状態 */
   const states = new Map<string, AgentState>()
   // 通知は参照を持っておかないと GC されてクリックが効かなくなる
   const notifications = new Map<string, Notification>()
 
   const store = new SessionStore(join(app.getPath('userData'), 'sessions.json'))
-  selectedId = store.selectedId
   const bundledRules = app.isPackaged ? join(process.resourcesPath, 'rules') : join(app.getAppPath(), 'rules')
   const rules = new RulesLoader(bundledRules, join(app.getPath('userData'), 'rules'))
 
@@ -72,12 +82,20 @@ function main(): void {
     win.setTitle(n > 0 ? `nagaya（確認待ち ${n}）` : 'nagaya')
   }
 
-  function showSession(id: string): void {
+  function showTab(sessionId: string, tabId: string): void {
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()
-    send('select-session', id)
+    send('select-session', sessionId, tabId)
+  }
+
+  /** タブの状態を忘れる（タブ・セッションを消したとき） */
+  function forgetTab(tabId: string): void {
+    ptys.kill(tabId)
+    states.delete(tabId)
+    notifications.get(tabId)?.close()
+    notifications.delete(tabId)
   }
 
   function onStateChanged(id: string, state: AgentState): void {
@@ -91,20 +109,26 @@ function main(): void {
     }
     if (prev === 'blocked') return
     // 見ている最中のセッションなら通知しない
-    const watching = win?.isFocused() && selectedId === id
+    const watching = win?.isFocused() && selectedTabId === id
     if (watching) return
-    const cfg = store.get(id)
-    if (!cfg) return
+    const found = store.tab(id)
+    if (!found) return
+    const { session, tab } = found
     if (win && !win.isFocused()) win.flashFrame(true)
     if (!Notification.isSupported()) return
     notifications.get(id)?.close()
+    // タブが1枚なら「ホスト / セッション」、複数なら「セッション / タブ（ホスト）」
+    const where =
+      session.tabs.length > 1
+        ? `${session.name} / ${tabLabel(tab)}${tab.host && tab.name ? `（${tab.host}）` : ''}`
+        : `${tab.host ? `${tab.host} / ` : ''}${session.name}`
     const n = new Notification({
-      title: `確認待ち: ${cfg.host ? `${cfg.host} / ` : ''}${cfg.name}`,
+      title: `確認待ち: ${where}`,
       body: 'Claude Code が許可・回答を待っています。クリックで切り替えます。',
     })
     n.on('click', () => {
       notifications.delete(id)
-      showSession(id)
+      showTab(session.id, id)
     })
     n.on('close', () => {
       if (notifications.get(id) === n) notifications.delete(id)
@@ -118,6 +142,8 @@ function main(): void {
     { key: 't', ctrl: true, shift: true, action: 'new-session' },
     { key: 'tab', ctrl: true, shift: false, action: 'next-session' },
     { key: 'tab', ctrl: true, shift: true, action: 'prev-session' },
+    { key: 'pagedown', ctrl: true, shift: false, action: 'next-tab' },
+    { key: 'pageup', ctrl: true, shift: false, action: 'prev-tab' },
     { key: 's', ctrl: true, shift: true, action: 'save-screen' },
     { key: 'd', ctrl: true, shift: true, action: 'toggle-explain' },
     { key: 'r', ctrl: true, shift: true, action: 'reload-rules' },
@@ -140,9 +166,12 @@ function main(): void {
         submenu: [
           { label: '新しいセッション…', ...acc('CmdOrCtrl+Shift+T'), click: menu('new-session') },
           { label: '新しいグループ…', click: menu('new-group') },
+          { label: '新しいタブ…', click: menu('new-tab') },
           { type: 'separator' },
           { label: '次のセッション', ...acc('Ctrl+Tab'), click: menu('next-session') },
           { label: '前のセッション', ...acc('Ctrl+Shift+Tab'), click: menu('prev-session') },
+          { label: '次のタブ', ...acc('CmdOrCtrl+PageDown'), click: menu('next-tab') },
+          { label: '前のタブ', ...acc('CmdOrCtrl+PageUp'), click: menu('prev-tab') },
           { type: 'separator' },
           { label: '画面をテキストで保存…', ...acc('CmdOrCtrl+Shift+S'), click: menu('save-screen') },
           { type: 'separator' },
@@ -166,6 +195,7 @@ function main(): void {
               click: () => applyTheme(t),
             })),
           },
+          { label: '端末のフォント…', click: menu('font-settings') },
           { type: 'separator' },
           { role: 'resetZoom', label: '実際のサイズ' },
           { role: 'zoomIn', label: '拡大' },
@@ -228,9 +258,9 @@ function main(): void {
     win.on('closed', () => {
       win = null
     })
-    // 外部リンクはブラウザで開く
+    // 外部リンクはブラウザで開く（http・https・mailto だけ。file: などは開かない）
     win.webContents.setWindowOpenHandler(({ url }) => {
-      void shell.openExternal(url)
+      if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
       return { action: 'deny' }
     })
     if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
@@ -248,16 +278,14 @@ function main(): void {
     const session = store.create(input)
     return { session, layout: store.layout() }
   })
-  ipcMain.handle('sessions:update', (_e, cfg: SessionConfig) => {
-    store.update(cfg)
-    return store.layout()
+  ipcMain.handle('sessions:update', (_e, id: string, meta: SessionMeta) => store.update(id, meta))
+  ipcMain.handle('sessions:duplicate', (_e, id: string, meta: SessionMeta) => {
+    const session = store.duplicate(id, meta)
+    return { session, layout: store.layout() }
   })
   ipcMain.handle('sessions:remove', (_e, id: string) => {
-    ptys.kill(id)
+    for (const t of store.get(id)?.tabs ?? []) forgetTab(t.id)
     store.remove(id)
-    states.delete(id)
-    notifications.get(id)?.close()
-    notifications.delete(id)
     updateTitle()
     return store.layout()
   })
@@ -293,7 +321,8 @@ function main(): void {
     const picked = await popup<NonNullable<SessionMenuAction>>((choose) => [
       { label: '編集…', click: () => choose({ type: 'edit' }) },
       { label: '複製…', click: () => choose({ type: 'duplicate' }) },
-      { label: '再起動', click: () => choose({ type: 'restart' }) },
+      { label: '新しいタブ…', click: () => choose({ type: 'new-tab' }) },
+      { label: cfg.tabs.length > 1 ? 'すべてのタブを再起動' : '再起動', click: () => choose({ type: 'restart' }) },
       {
         label: 'グループへ移動',
         submenu: [
@@ -318,6 +347,40 @@ function main(): void {
     ])
     if (picked?.type === 'delete') {
       const ok = await confirm(`セッション「${cfg.name}」を削除しますか？`, '実行中のプロセスは終了します。', '削除')
+      return ok ? picked : null
+    }
+    return picked
+  })
+
+  // ---- タブ ----
+  ipcMain.handle('tabs:add', (_e, sessionId: string, input: NewTabInput, afterId: string | null) => {
+    const tab = store.addTab(sessionId, input, afterId)
+    return { tab, layout: store.layout() }
+  })
+  ipcMain.handle('tabs:update', (_e, cfg: TabConfig) => store.updateTab(cfg))
+  ipcMain.handle('tabs:remove', (_e, id: string) => {
+    if ((store.tab(id)?.session.tabs.length ?? 0) > 1) forgetTab(id)
+    const layout = store.removeTab(id)
+    updateTitle()
+    return layout
+  })
+  ipcMain.handle('tabs:menu', async (_e, id: string): Promise<TabMenuAction> => {
+    const found = store.tab(id)
+    if (!win || !found) return null
+    const last = found.session.tabs.length <= 1
+    const picked = await popup<NonNullable<TabMenuAction>>((choose) => [
+      { label: '編集…', click: () => choose({ type: 'edit' }) },
+      { label: '複製…', click: () => choose({ type: 'duplicate' }) },
+      { label: '再起動', click: () => choose({ type: 'restart' }) },
+      { type: 'separator' },
+      {
+        label: last ? 'タブを閉じる（最後の1枚は閉じられません）' : 'タブを閉じる…',
+        enabled: !last,
+        click: () => choose({ type: 'close' }),
+      },
+    ])
+    if (picked?.type === 'close') {
+      const ok = await confirm(`タブ「${tabLabel(found.tab)}」を閉じますか？`, '実行中のプロセスは終了します。', '閉じる')
       return ok ? picked : null
     }
     return picked
@@ -354,11 +417,14 @@ function main(): void {
 
   // ---- 設定 ----
   ipcMain.handle('settings:get', () => store.settings)
-  ipcMain.handle('settings:theme', (_e, theme: ThemeSetting) => applyTheme(theme))
+  ipcMain.handle('settings:font', (_e, font: FontSetting) => {
+    store.setFont(font)
+    send('settings:changed', store.settings)
+  })
 
   ipcMain.handle('pty:start', (_e, id: string, cols: number, rows: number, reconnect: boolean) => {
-    const cfg = store.get(id)
-    if (!cfg) return { ok: false, error: 'セッションが見つかりません' }
+    const cfg = store.tab(id)?.tab
+    if (!cfg) return { ok: false, error: 'タブが見つかりません' }
     try {
       ptys.start(cfg, cols, rows, reconnect)
       return { ok: true }
@@ -378,12 +444,12 @@ function main(): void {
   })
 
   ipcMain.on('state', (_e, id: string, state: AgentState) => onStateChanged(id, state))
-  ipcMain.on('selected', (_e, id: string | null) => {
-    selectedId = id
-    store.setSelected(id)
-    if (id) {
-      notifications.get(id)?.close()
-      notifications.delete(id)
+  ipcMain.on('selected', (_e, sessionId: string | null, tabId: string | null) => {
+    selectedTabId = tabId
+    store.setSelected(sessionId)
+    if (tabId) {
+      notifications.get(tabId)?.close()
+      notifications.delete(tabId)
     }
   })
 

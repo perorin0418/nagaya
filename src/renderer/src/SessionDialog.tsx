@@ -1,17 +1,32 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import type { NewSessionInput, SessionGroup } from '@shared/types'
+import type { NewTabInput, SessionGroup } from '@shared/types'
 
 export const NEW_GROUP = '__new__'
 
+/**
+ * new: 新しいセッション（名前・グループと、最初のタブ）
+ * edit / duplicate: セッションの名前とグループ（複製はタブごと写す）
+ * tab-new / tab-edit / tab-duplicate: タブ1枚の設定
+ */
+export type SessionDialogMode = 'new' | 'edit' | 'duplicate' | 'tab-new' | 'tab-edit' | 'tab-duplicate'
+
 export interface SessionDialogResult {
-  input: NewSessionInput
+  name: string
+  groupId: string | null
   /** 「新しいグループ」を選んだときのグループ名 */
   newGroupName: string | null
+  tab: NewTabInput
+}
+
+export interface SessionDialogInitial {
+  name?: string
+  groupId?: string | null
+  tab?: Partial<NewTabInput>
 }
 
 interface Props {
-  mode: 'new' | 'edit' | 'duplicate'
-  initial: Partial<NewSessionInput>
+  mode: SessionDialogMode
+  initial: SessionDialogInitial
   groups: SessionGroup[]
   agents: string[]
   defaultShell: string
@@ -23,19 +38,37 @@ interface Props {
 const sshCommand = (host: string, extra = '') =>
   `ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -t ${host} koya run claude -- claude${extra}`
 
-const TITLE = { new: '新しいセッション', edit: 'セッションを編集', duplicate: 'セッションを複製' }
-const SUBMIT = { new: '作成', edit: '保存', duplicate: '作成' }
+const TITLE: Record<SessionDialogMode, string> = {
+  new: '新しいセッション',
+  edit: 'セッションを編集',
+  duplicate: 'セッションを複製',
+  'tab-new': '新しいタブ',
+  'tab-edit': 'タブを編集',
+  'tab-duplicate': 'タブを複製',
+}
+const SUBMIT: Record<SessionDialogMode, string> = {
+  new: '作成',
+  edit: '保存',
+  duplicate: '作成',
+  'tab-new': '作成',
+  'tab-edit': '保存',
+  'tab-duplicate': '作成',
+}
 
 export function SessionDialog({ mode, initial, groups, agents, defaultShell, onCancel, onSubmit }: Props) {
+  const showSession = mode === 'new' || mode === 'edit' || mode === 'duplicate'
+  const showTab = mode === 'new' || mode.startsWith('tab-')
+  const t = initial.tab ?? {}
   const [name, setName] = useState(initial.name ?? '')
-  const [host, setHost] = useState(initial.host ?? '')
   const [groupId, setGroupId] = useState<string>(initial.groupId ?? '')
   const [newGroupName, setNewGroupName] = useState('')
-  const [command, setCommand] = useState(initial.command ?? '')
-  const [cwd, setCwd] = useState(initial.cwd ?? '')
-  const [agent, setAgent] = useState(initial.agent ?? (agents.includes('claude') ? 'claude' : (agents[0] ?? '')))
-  const [autoReconnect, setAutoReconnect] = useState(initial.autoReconnect ?? true)
-  const [reconnectCommand, setReconnectCommand] = useState(initial.reconnectCommand ?? '')
+  const [tabName, setTabName] = useState(t.name ?? '')
+  const [host, setHost] = useState(t.host ?? '')
+  const [command, setCommand] = useState(t.command ?? '')
+  const [cwd, setCwd] = useState(t.cwd ?? '')
+  const [agent, setAgent] = useState(t.agent ?? (agents.includes('claude') ? 'claude' : (agents[0] ?? '')))
+  const [autoReconnect, setAutoReconnect] = useState(t.autoReconnect ?? true)
+  const [reconnectCommand, setReconnectCommand] = useState(t.reconnectCommand ?? '')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const first = useRef<HTMLInputElement>(null)
@@ -44,28 +77,29 @@ export function SessionDialog({ mode, initial, groups, agents, defaultShell, onC
 
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (!name.trim()) {
+    if (showSession && !name.trim()) {
       setError('名前を入れてください')
       return
     }
-    if (groupId === NEW_GROUP && !newGroupName.trim()) {
+    if (showSession && groupId === NEW_GROUP && !newGroupName.trim()) {
       setError('新しいグループの名前を入れてください')
       return
     }
     setBusy(true)
     try {
       await onSubmit({
-        input: {
-          name: name.trim(),
+        name: name.trim(),
+        groupId: groupId && groupId !== NEW_GROUP ? groupId : null,
+        newGroupName: groupId === NEW_GROUP ? newGroupName.trim() : null,
+        tab: {
+          name: tabName.trim(),
           host: host.trim(),
-          groupId: groupId && groupId !== NEW_GROUP ? groupId : null,
           command: command.trim(),
           cwd: cwd.trim(),
           agent,
           autoReconnect,
           reconnectCommand: reconnectCommand.trim(),
         },
-        newGroupName: groupId === NEW_GROUP ? newGroupName.trim() : null,
       })
     } catch (err) {
       setError((err as Error).message)
@@ -95,85 +129,114 @@ export function SessionDialog({ mode, initial, groups, agents, defaultShell, onC
         if (e.key === 'Escape') onCancel()
       }}
     >
-      <form className="dialog" onSubmit={submit}>
+      <form className={`dialog${showTab ? '' : ' small'}`} onSubmit={submit}>
         <h2>{TITLE[mode]}</h2>
-        <label>
-          <span>名前</span>
-          <input ref={first} value={name} onChange={(e) => setName(e.target.value)} placeholder="myapp" />
-        </label>
-        <label>
-          <span>グループ</span>
-          <select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
-            <option value="">（グループなし）</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-            <option value={NEW_GROUP}>新しいグループ…</option>
-          </select>
-        </label>
-        {groupId === NEW_GROUP ? (
-          <label>
-            <span>グループの名前</span>
-            <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="認証の作り直し" />
-          </label>
-        ) : null}
-        <label>
-          <span>ホスト</span>
-          <input value={host} onChange={(e) => changeHost(e.target.value)} placeholder="linux-a（表示とコマンドのひな形に使う。空ならローカル）" />
-        </label>
-        <label>
-          <span>コマンド</span>
-          <input
-            className="mono"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder={`空欄ならシェル（${defaultShell}）`}
-          />
-        </label>
-        {h && command.trim() !== sshCommand(h) ? (
-          <button type="button" className="link hint" onClick={() => setCommand(sshCommand(h))}>
-            「{sshCommand(h)}」を入れる
-          </button>
-        ) : null}
-        <label>
-          <span>作業ディレクトリ</span>
-          <input className="mono" value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="空欄ならホーム" />
-        </label>
-        <label>
-          <span>判定ルール</span>
-          <select value={agent} onChange={(e) => setAgent(e.target.value)}>
-            {agentOptions.map((a) => (
-              <option key={a} value={a}>
-                {a}
-              </option>
-            ))}
-            <option value="">判定しない</option>
-          </select>
-        </label>
-        <label className="check">
-          <span>自動再接続</span>
-          <span className="check-body">
-            <input type="checkbox" checked={autoReconnect} onChange={(e) => setAutoReconnect(e.target.checked)} />
-            SSH が切れたら（終了コード 255）自動で再接続する
-          </span>
-        </label>
-        {autoReconnect ? (
+        {showSession ? (
           <>
             <label>
-              <span>再接続のコマンド</span>
+              <span>名前</span>
+              <input ref={first} value={name} onChange={(e) => setName(e.target.value)} placeholder="myapp" />
+            </label>
+            <label>
+              <span>グループ</span>
+              <select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+                <option value="">（グループなし）</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+                <option value={NEW_GROUP}>新しいグループ…</option>
+              </select>
+            </label>
+            {groupId === NEW_GROUP ? (
+              <label>
+                <span>グループの名前</span>
+                <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} placeholder="認証の作り直し" />
+              </label>
+            ) : null}
+            {mode === 'duplicate' ? <div className="hint">タブはすべてそのまま写します。</div> : null}
+          </>
+        ) : null}
+        {mode === 'new' ? <div className="section-note">最初のタブ（あとからタブを足せます）</div> : null}
+        {showTab ? (
+          <>
+            {mode !== 'new' ? (
+              <label>
+                <span>タブの名前</span>
+                <input
+                  ref={first}
+                  value={tabName}
+                  onChange={(e) => setTabName(e.target.value)}
+                  placeholder="空欄ならホスト名"
+                />
+              </label>
+            ) : null}
+            <label>
+              <span>ホスト</span>
               <input
-                className="mono"
-                value={reconnectCommand}
-                onChange={(e) => setReconnectCommand(e.target.value)}
-                placeholder="空欄ならコマンドと同じ"
+                value={host}
+                onChange={(e) => changeHost(e.target.value)}
+                placeholder="linux-a（表示とコマンドのひな形に使う。空ならローカル）"
               />
             </label>
-            {h && reconnectCommand.trim() !== sshCommand(h, ' --continue') ? (
-              <button type="button" className="link hint" onClick={() => setReconnectCommand(sshCommand(h, ' --continue'))}>
-                前の会話の続きから始める（claude --continue）
+            <label>
+              <span>コマンド</span>
+              <input
+                className="mono"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder={`空欄ならシェル（${defaultShell}）`}
+              />
+            </label>
+            {h && command.trim() !== sshCommand(h) ? (
+              <button type="button" className="link hint" onClick={() => setCommand(sshCommand(h))}>
+                「{sshCommand(h)}」を入れる
               </button>
+            ) : null}
+            <label>
+              <span>作業ディレクトリ</span>
+              <input className="mono" value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="空欄ならホーム" />
+            </label>
+            <label>
+              <span>判定ルール</span>
+              <select value={agent} onChange={(e) => setAgent(e.target.value)}>
+                {agentOptions.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+                <option value="">判定しない</option>
+              </select>
+            </label>
+            <label className="check">
+              <span>自動再接続</span>
+              <span className="check-body">
+                <input type="checkbox" checked={autoReconnect} onChange={(e) => setAutoReconnect(e.target.checked)} />
+                SSH が切れたら（終了コード 255）自動で再接続する
+              </span>
+            </label>
+            {autoReconnect ? (
+              <>
+                <label>
+                  <span>再接続のコマンド</span>
+                  <input
+                    className="mono"
+                    value={reconnectCommand}
+                    onChange={(e) => setReconnectCommand(e.target.value)}
+                    placeholder="空欄ならコマンドと同じ"
+                  />
+                </label>
+                {h && reconnectCommand.trim() !== sshCommand(h, ' --continue') ? (
+                  <button
+                    type="button"
+                    className="link hint"
+                    onClick={() => setReconnectCommand(sshCommand(h, ' --continue'))}
+                  >
+                    前の会話の続きから始める（claude --continue）
+                  </button>
+                ) : null}
+              </>
             ) : null}
           </>
         ) : null}
