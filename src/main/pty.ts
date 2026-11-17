@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import * as pty from 'node-pty'
-import type { SessionConfig } from '@shared/types'
+import type { TabConfig } from '@shared/types'
 
 export interface SpawnSpec {
   file: string
@@ -20,7 +20,7 @@ export function defaultShell(): string {
  * セッションの設定から起動するプロセスを決める。
  * コマンドはシェル経由で実行する（引用符や PATH の解決をシェルに任せるため）。
  */
-export function spawnSpec(cfg: Pick<SessionConfig, 'command' | 'cwd'>): SpawnSpec {
+export function spawnSpec(cfg: Pick<TabConfig, 'command' | 'cwd'>): SpawnSpec {
   const shell = defaultShell()
   const win = process.platform === 'win32'
   const isPwsh = /(^|[\\/])(powershell|pwsh)(\.exe)?$/i.test(shell)
@@ -48,7 +48,7 @@ export function spawnSpec(cfg: Pick<SessionConfig, 'command' | 'cwd'>): SpawnSpe
 type DataListener = (id: string, data: string) => void
 type ExitListener = (id: string, exitCode: number, signal?: number) => void
 
-/** セッションごとの PTY を管理する。出力は少しまとめてから送る（IPC の回数を減らすため） */
+/** タブごとの PTY を管理する。出力は少しまとめてから送る（IPC の回数を減らすため） */
 export class PtyManager {
   private ptys = new Map<string, pty.IPty>()
   private buffers = new Map<string, string>()
@@ -64,7 +64,7 @@ export class PtyManager {
   }
 
   /** reconnect が true なら、再接続のコマンド（あれば）で起動する */
-  start(cfg: SessionConfig, cols: number, rows: number, reconnect = false): void {
+  start(cfg: TabConfig, cols: number, rows: number, reconnect = false): void {
     this.kill(cfg.id)
     const command = reconnect && cfg.reconnectCommand ? cfg.reconnectCommand : cfg.command
     const spec = spawnSpec({ command, cwd: cfg.cwd })

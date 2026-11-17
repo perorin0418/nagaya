@@ -1,6 +1,14 @@
-import { useState, type DragEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import type { SidebarSection } from '@shared/layout'
-import type { AgentState, SessionGroup } from '@shared/types'
+import {
+  hostsLabel,
+  STATE_LABEL,
+  tabLabel,
+  worstState,
+  type AgentState,
+  type SessionConfig,
+  type SessionGroup,
+} from '@shared/types'
 import type { ConnEvent } from './terminals'
 
 const SESSION_MIME = 'application/x-nagaya-session'
@@ -10,8 +18,8 @@ interface Props {
   sections: SidebarSection[]
   /** グループが1つ以上あるか（「グループなし」の見出しを出すか） */
   hasGroups: boolean
+  /** タブごとの状態・未読・接続（キーはタブの id） */
   states: Record<string, AgentState>
-  /** 未読のセッション */
   unread: Record<string, true>
   conns: Record<string, ConnEvent>
   selectedId: string | null
@@ -30,7 +38,27 @@ interface Props {
 /** ドロップ先の目印（どの行の上・下か） */
 type DropMark = { kind: 'session' | 'group' | 'section'; id: string; pos: 'before' | 'after' | 'into' } | null
 
-const RANK: Record<AgentState, number> = { blocked: 3, working: 2, idle: 1, unknown: 0 }
+/** ツールチップを出すまでの時間 */
+const HOVER_DELAY_MS = 350
+
+/** セッションの行に出す、タブをまとめた状態 */
+function summarize(s: SessionConfig, p: Pick<Props, 'states' | 'unread' | 'conns'>) {
+  const state = worstState(s.tabs.map((t) => p.states[t.id] ?? 'unknown'))
+  const unread = s.tabs.some((t) => p.unread[t.id])
+  const conns = s.tabs.map((t) => p.conns[t.id]?.status)
+  const conn = conns.includes('reconnecting')
+    ? 'reconnecting'
+    : conns.length > 0 && conns.every((c) => c === 'exited')
+      ? 'exited'
+      : null
+  return { state, unread, conn }
+}
+
+function tabStatus(state: AgentState, conn: ConnEvent | undefined): string {
+  if (conn?.status === 'reconnecting') return `再接続中（${conn.attempt ?? 1} 回目）`
+  if (conn?.status === 'exited') return '終了'
+  return state === 'unknown' ? '—' : STATE_LABEL[state]
+}
 
 function half(e: DragEvent): 'before' | 'after' {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -38,6 +66,22 @@ function half(e: DragEvent): 'before' | 'after' {
 }
 
 export function Sidebar(p: Props) {
+  // セッションにマウスを合わせたときの、タブごとの状態の一覧
+  const [hover, setHover] = useState<{ id: string; top: number; left: number } | null>(null)
+  const hoverTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), [])
+  function hoverIn(id: string, el: HTMLElement) {
+    window.clearTimeout(hoverTimer.current)
+    hoverTimer.current = window.setTimeout(() => {
+      const r = el.getBoundingClientRect()
+      setHover({ id, top: r.top, left: r.right + 6 })
+    }, HOVER_DELAY_MS)
+  }
+  function hoverOut() {
+    window.clearTimeout(hoverTimer.current)
+    setHover(null)
+  }
+  const hovered = hover ? p.sections.flatMap((x) => x.sessions).find((s) => s.id === hover.id) : undefined
   const [mark, setMark] = useState<DropMark>(null)
   const dragging = (e: DragEvent, mime: string) => e.dataTransfer.types.includes(mime)
 
@@ -113,12 +157,10 @@ export function Sidebar(p: Props) {
           const key = sec.group?.id ?? '__none__'
           const collapsed = sec.group?.collapsed ?? false
           const showHeader = sec.group !== null || p.hasGroups
-          const worst = sec.sessions.reduce<AgentState>(
-            (w, s) => (RANK[p.states[s.id] ?? 'unknown'] > RANK[w] ? (p.states[s.id] ?? 'unknown') : w),
-            'unknown',
-          )
-          const blocked = sec.sessions.filter((s) => p.states[s.id] === 'blocked').length
-          const unread = sec.sessions.filter((s) => p.unread[s.id]).length
+          const sums = sec.sessions.map((s) => summarize(s, p))
+          const worst = worstState(sums.map((x) => x.state))
+          const blocked = sums.filter((x) => x.state === 'blocked').length
+          const unread = sums.filter((x) => x.unread).length
           const sum = [blocked > 0 ? `確認待ち ${blocked}` : '', unread > 0 ? `未読 ${unread}` : '']
             .filter(Boolean)
             .join('・')
@@ -170,18 +212,19 @@ export function Sidebar(p: Props) {
               ) : null}
               {!collapsed &&
                 sec.sessions.map((s, i) => {
-                  const st = p.states[s.id] ?? 'unknown'
-                  const conn = p.conns[s.id]
+                  const { state: st, unread: isUnread, conn } = summarize(s, p)
+                  const hosts = hostsLabel(s.tabs)
                   const m = mark?.kind === 'session' && mark.id === s.id ? mark.pos : null
                   let status: ReactNode = st !== 'unknown' ? <span className="st">{st}</span> : null
-                  if (conn?.status === 'reconnecting') status = <span className="st warn">再接続中</span>
-                  else if (conn?.status === 'exited') status = <span className="st">終了</span>
+                  if (conn === 'reconnecting') status = <span className="st warn">再接続中</span>
+                  else if (conn === 'exited') status = <span className="st">終了</span>
                   return (
                     <div
                       key={s.id}
-                      className={`sess${s.id === p.selectedId ? ' sel' : ''}${p.unread[s.id] ? ' unread' : ''}${m ? ` drop-${m}` : ''}`}
+                      className={`sess${s.id === p.selectedId ? ' sel' : ''}${isUnread ? ' unread' : ''}${m ? ` drop-${m}` : ''}`}
                       draggable
                       onDragStart={(e) => {
+                        hoverOut()
                         e.dataTransfer.setData(SESSION_MIME, s.id)
                         e.dataTransfer.effectAllowed = 'move'
                       }}
@@ -197,14 +240,17 @@ export function Sidebar(p: Props) {
                       onClick={() => p.onSelect(s.id)}
                       onContextMenu={(e) => {
                         e.preventDefault()
+                        hoverOut()
                         p.onSessionMenu(s.id)
                       }}
-                      title={`${s.host ? `${s.host}: ` : ''}${s.command || 'シェル'}`}
+                      onMouseEnter={(e) => hoverIn(s.id, e.currentTarget)}
+                      onMouseLeave={hoverOut}
                     >
                       <span className={`dot ${st}`} />
                       <span className="name">{s.name}</span>
-                      {s.host ? <span className="host-tag">{s.host}</span> : null}
-                      {p.unread[s.id] ? <span className="unread-tag">未読</span> : null}
+                      {hosts ? <span className="host-tag">{hosts}</span> : null}
+                      {s.tabs.length > 1 ? <span className="tab-count">{s.tabs.length}</span> : null}
+                      {isUnread ? <span className="unread-tag">未読</span> : null}
                       {status}
                     </div>
                   )
@@ -232,6 +278,22 @@ export function Sidebar(p: Props) {
       <div className="side-foot">
         <div>ドラッグで並べ替え</div>
       </div>
+      {hover && hovered ? (
+        <div className="tab-tip" style={{ top: hover.top, left: hover.left }} role="tooltip">
+          {hovered.tabs.map((t) => {
+            const st = p.states[t.id] ?? 'unknown'
+            return (
+              <div key={t.id} className="tab-tip-row">
+                <span className={`dot ${st}`} />
+                <span className="tab-tip-name">{tabLabel(t)}</span>
+                <span className="tab-tip-host">{t.name && t.host ? t.host : ''}</span>
+                <span className={`tab-tip-state ${st}`}>{tabStatus(st, p.conns[t.id])}</span>
+                {p.unread[t.id] ? <span className="unread-tag">未読</span> : <span />}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
     </nav>
   )
 }

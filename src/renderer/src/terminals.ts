@@ -1,5 +1,5 @@
 /**
- * セッションごとの xterm.js を React の外で持つ。
+ * タブごとの xterm.js を React の外で持つ（id はタブの id）。
  * 選択を切り替えても端末と PTY は生かしたまま、表示だけを切り替える。
  * 状態の判定もここで行う（非表示のセッションも判定を続ける）。
  */
@@ -13,7 +13,7 @@ import {
   type AgentState,
   type FontSetting,
   type RulesPayload,
-  type SessionConfig,
+  type TabConfig,
 } from '@shared/types'
 
 const api = window.nagaya
@@ -55,7 +55,7 @@ export interface ConnEvent {
 
 interface Entry {
   id: string
-  cfg: SessionConfig
+  cfg: TabConfig
   term: Terminal
   fit: FitAddon
   el: HTMLDivElement
@@ -205,7 +205,7 @@ class TerminalManager {
   // ---- 端末 ----
 
   /** 端末を作って container に置き、PTY を起動する（作成済みなら置き直すだけ） */
-  attach(cfg: SessionConfig, container: HTMLElement): void {
+  attach(cfg: TabConfig, container: HTMLElement): void {
     const id = cfg.id
     let e = this.entries.get(id)
     if (e) {
@@ -365,8 +365,8 @@ class TerminalManager {
     await this.start(id)
   }
 
-  /** セッションの設定が変わったとき（ルール・自動再接続など） */
-  updateConfig(cfg: SessionConfig): void {
+  /** タブの設定が変わったとき（ルール・自動再接続など） */
+  updateConfig(cfg: TabConfig): void {
     const e = this.entries.get(cfg.id)
     if (!e) return
     e.cfg = cfg

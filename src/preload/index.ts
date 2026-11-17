@@ -12,10 +12,16 @@ const api: NagayaApi = {
 
   getLayout: () => ipcRenderer.invoke('layout:get'),
   createSession: (input) => ipcRenderer.invoke('sessions:create', input),
-  updateSession: (cfg) => ipcRenderer.invoke('sessions:update', cfg),
+  updateSession: (id, meta) => ipcRenderer.invoke('sessions:update', id, meta),
+  duplicateSession: (id, meta) => ipcRenderer.invoke('sessions:duplicate', id, meta),
   removeSession: (id) => ipcRenderer.invoke('sessions:remove', id),
   moveSession: (id, groupId, beforeId) => ipcRenderer.invoke('sessions:move', id, groupId, beforeId),
   sessionMenu: (id) => ipcRenderer.invoke('sessions:menu', id),
+
+  addTab: (sessionId, input, afterId) => ipcRenderer.invoke('tabs:add', sessionId, input, afterId),
+  updateTab: (cfg) => ipcRenderer.invoke('tabs:update', cfg),
+  removeTab: (id) => ipcRenderer.invoke('tabs:remove', id),
+  tabMenu: (id) => ipcRenderer.invoke('tabs:menu', id),
 
   createGroup: (name) => ipcRenderer.invoke('groups:create', name),
   renameGroup: (id, name) => ipcRenderer.invoke('groups:rename', id, name),
@@ -41,7 +47,7 @@ const api: NagayaApi = {
   onSettingsChanged: (cb) => on('settings:changed', cb),
 
   reportState: (id, state) => ipcRenderer.send('state', id, state),
-  reportSelected: (id) => ipcRenderer.send('selected', id),
+  reportSelected: (sessionId, tabId) => ipcRenderer.send('selected', sessionId, tabId),
   onSelectSession: (cb) => on('select-session', cb),
   onMenu: (cb) => on('menu', cb),
 

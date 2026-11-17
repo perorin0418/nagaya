@@ -3,7 +3,14 @@ import { moveGroup, moveSession, removeGroup, sections } from '../src/shared/lay
 import type { Layout, SessionConfig } from '../src/shared/types'
 
 function s(id: string, groupId: string | null): SessionConfig {
-  return { id, name: id, host: '', groupId, command: '', cwd: '', agent: 'claude', autoReconnect: true, reconnectCommand: '' }
+  return {
+    id,
+    name: id,
+    groupId,
+    tabs: [
+      { id: `${id}-t`, name: '', host: '', command: '', cwd: '', agent: 'claude', autoReconnect: true, reconnectCommand: '' },
+    ],
+  }
 }
 
 const base: Layout = {

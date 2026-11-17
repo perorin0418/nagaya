@@ -16,15 +16,13 @@ export interface SessionGroup {
   collapsed: boolean
 }
 
-/** 保存されるセッションの設定 */
-export interface SessionConfig {
+/** タブ1枚の設定（1枚につき端末が1つ。タブごとにホストが違ってもよい） */
+export interface TabConfig {
   id: string
-  /** サイドバーに出す名前 */
+  /** タブに出す名前（空ならホスト名、ホストもなければ「ローカル」） */
   name: string
   /** 接続先のホスト名（表示と ssh コマンドのひな形に使う。空ならローカル） */
   host: string
-  /** 入っているグループ（null ならグループなし） */
-  groupId: string | null
   /** 実行するコマンド（空ならシェル） */
   command: string
   /** 作業ディレクトリ（空ならホーム） */
@@ -37,7 +35,48 @@ export interface SessionConfig {
   reconnectCommand: string
 }
 
-export type NewSessionInput = Omit<SessionConfig, 'id'>
+export type NewTabInput = Omit<TabConfig, 'id'>
+
+/** 保存されるセッションの設定（サイドバーの1行。中にタブを1枚以上持つ） */
+export interface SessionConfig {
+  id: string
+  /** サイドバーに出す名前 */
+  name: string
+  /** 入っているグループ（null ならグループなし） */
+  groupId: string | null
+  /** タブ（1枚以上。配列の順に並ぶ） */
+  tabs: TabConfig[]
+}
+
+/** 新しいセッション（最初のタブを1枚持つ） */
+export interface NewSessionInput {
+  name: string
+  groupId: string | null
+  tab: NewTabInput
+}
+
+/** セッションの名前とグループ（セッションの編集で変えられるもの） */
+export type SessionMeta = Pick<SessionConfig, 'name' | 'groupId'>
+
+/** タブに出す名前 */
+export function tabLabel(t: Pick<TabConfig, 'name' | 'host'>): string {
+  return t.name || t.host || 'ローカル'
+}
+
+/** サイドバーに出すホスト名（1つならそのまま、複数なら「最初のホスト +残りの数」） */
+export function hostsLabel(tabs: Pick<TabConfig, 'host'>[]): string {
+  const hosts = [...new Set(tabs.map((t) => t.host).filter(Boolean))]
+  if (hosts.length <= 1) return hosts[0] ?? ''
+  return `${hosts[0]} +${hosts.length - 1}`
+}
+
+/** 注意が要る順（大きいほど注意が要る） */
+export const STATE_RANK: Record<AgentState, number> = { blocked: 3, working: 2, idle: 1, unknown: 0 }
+
+/** いくつかの状態のうち、一番注意が要るもの */
+export function worstState(states: AgentState[]): AgentState {
+  return states.reduce<AgentState>((w, s) => (STATE_RANK[s] > STATE_RANK[w] ? s : w), 'unknown')
+}
 
 /** サイドバーの並び（グループとセッション。どちらも配列の順に並ぶ） */
 export interface Layout {
