@@ -258,9 +258,9 @@ function main(): void {
     win.on('closed', () => {
       win = null
     })
-    // 外部リンクはブラウザで開く
+    // 外部リンクはブラウザで開く（http・https・mailto だけ。file: などは開かない）
     win.webContents.setWindowOpenHandler(({ url }) => {
-      void shell.openExternal(url)
+      if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
       return { action: 'deny' }
     })
     if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {

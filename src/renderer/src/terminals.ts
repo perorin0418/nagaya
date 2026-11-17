@@ -5,6 +5,7 @@
  */
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { DEFAULT_FONT, fontFamilyCss } from '@shared/font'
 import { compileRuleSet, detect, Stabilizer, type CompiledRuleSet, type DetectResult } from '@shared/detect'
@@ -76,6 +77,11 @@ export interface StateEvent {
 }
 
 type Listener<T> = (v: T) => void
+
+/** リンクをブラウザで開く（メイン側の setWindowOpenHandler が既定のブラウザに渡す） */
+function openLink(uri: string): void {
+  window.open(uri)
+}
 
 class TerminalManager {
   private entries = new Map<string, Entry>()
@@ -224,10 +230,13 @@ class TerminalManager {
       allowProposedApi: true,
       theme: theme(),
       macOptionIsMeta: true,
+      // OSC 8 のハイパーリンク（既定の処理は空のウィンドウを開いてから移るため、ブラウザに URL が渡らない）
+      linkHandler: { activate: (_e, uri) => openLink(uri) },
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.loadAddon(new Unicode11Addon())
+    term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri))) // 文字のままの URL もクリックで開く
     term.unicode.activeVersion = '11' // 日本語・絵文字の幅を Claude Code の想定に合わせる
     term.open(el)
 
