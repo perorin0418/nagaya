@@ -261,6 +261,16 @@ class TerminalManager {
       }
     })
     term.attachCustomKeyEventHandler((ev) => this.handleKey(entry, ev))
+    // 選択しただけでコピーする。ドラッグは端末の外で離すこともあるので、離したのは window で受ける。
+    // ダブルクリックの単語の選択は mouseup の後に決まるので dblclick でも受ける
+    const copySelection = (): void => {
+      if (term.hasSelection()) api.clipboardWrite(term.getSelection())
+    }
+    el.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0) return
+      window.addEventListener('mouseup', copySelection, { once: true })
+    })
+    el.addEventListener('dblclick', copySelection)
     el.addEventListener('contextmenu', (ev) => {
       // 右クリック: 選択があればコピー、なければ貼り付け（Windows Terminal と同じ）
       ev.preventDefault()

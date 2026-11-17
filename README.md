@@ -82,7 +82,7 @@ SSH が不意に切れたとき（ssh の終了コードが **255** のとき）
 | 判定の詳細を表示 | Ctrl+Shift+D |
 | 画面をテキストで保存 | Ctrl+Shift+S |
 | ルールを再読み込み | Ctrl+Shift+R |
-| コピー | 選択して Ctrl+C（選択がなければ ^C を送る）、Ctrl+Shift+C、右クリック |
+| コピー | 選択するだけでコピーされる。ほかに Ctrl+C（選択がなければ ^C を送る）、Ctrl+Shift+C、右クリック |
 | 貼り付け | Ctrl+V、Ctrl+Shift+V、右クリック（選択がないとき） |
 | 入力欄で改行 | Shift+Enter |
 
