@@ -37,6 +37,15 @@ export interface TabConfig {
 
 export type NewTabInput = Omit<TabConfig, 'id'>
 
+/** 分割の向き（row は左右に、column は上下に並べる） */
+export type SplitDir = 'row' | 'column'
+
+/**
+ * 分割の配置（木）。葉がタブ1枚。分けたところでは a が左（上）、b が右（下）で、
+ * ratio は a が占める割合
+ */
+export type PaneNode = { tabId: string } | { dir: SplitDir; ratio: number; a: PaneNode; b: PaneNode }
+
 /** 保存されるセッションの設定（サイドバーの1行。中にタブを1枚以上持つ） */
 export interface SessionConfig {
   id: string
@@ -46,6 +55,8 @@ export interface SessionConfig {
   groupId: string | null
   /** タブ（1枚以上。配列の順に並ぶ） */
   tabs: TabConfig[]
+  /** 並べて表示するタブの組（それぞれ2枚以上。1枚のタブが入るのは1つだけ） */
+  splits: PaneNode[]
 }
 
 /** 新しいセッション（最初のタブを1枚持つ） */

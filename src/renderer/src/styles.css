@@ -360,6 +360,32 @@ button.tool.on {
   visibility: visible;
   pointer-events: auto;
 }
+/* 分割の中の1枚。操作の対象には青い枠を付ける */
+.term-slot.split {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.term-slot.split.focused {
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+.split-divider {
+  position: absolute;
+  z-index: 2;
+}
+.split-divider.row {
+  width: 6px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+.split-divider.column {
+  height: 6px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+.split-divider:hover,
+.split-divider:active {
+  background: var(--drop);
+  opacity: 0.4;
+}
 .term-inner {
   width: 100%;
   height: 100%;
@@ -590,6 +616,10 @@ button:disabled {
   background: var(--surface);
   border-color: var(--border);
   color: var(--text);
+}
+.tab.in-view {
+  border-color: var(--border);
+  border-style: dashed;
 }
 .tab.unread .tab-name {
   font-weight: 700;

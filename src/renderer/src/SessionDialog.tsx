@@ -8,7 +8,7 @@ export const NEW_GROUP = '__new__'
  * edit / duplicate: セッションの名前とグループ（複製はタブごと写す）
  * tab-new / tab-edit / tab-duplicate: タブ1枚の設定
  */
-export type SessionDialogMode = 'new' | 'edit' | 'duplicate' | 'tab-new' | 'tab-edit' | 'tab-duplicate'
+export type SessionDialogMode = 'new' | 'edit' | 'duplicate' | 'tab-new' | 'tab-edit' | 'tab-duplicate' | 'tab-split'
 
 export interface SessionDialogResult {
   name: string
@@ -45,6 +45,7 @@ const TITLE: Record<SessionDialogMode, string> = {
   'tab-new': '新しいタブ',
   'tab-edit': 'タブを編集',
   'tab-duplicate': 'タブを複製',
+  'tab-split': '分割して新しいタブを開く',
 }
 const SUBMIT: Record<SessionDialogMode, string> = {
   new: '作成',
@@ -53,6 +54,7 @@ const SUBMIT: Record<SessionDialogMode, string> = {
   'tab-new': '作成',
   'tab-edit': '保存',
   'tab-duplicate': '作成',
+  'tab-split': '分割',
 }
 
 export function SessionDialog({ mode, initial, groups, agents, defaultShell, onCancel, onSubmit }: Props) {

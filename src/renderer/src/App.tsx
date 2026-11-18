@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppInfo } from '@shared/api'
 import { DEFAULT_FONT } from '@shared/font'
 import { sections as toSections } from '@shared/layout'
+import { findSplit, paneLayout, setRatio, type PanePath } from '@shared/split'
 import {
   tabLabel,
   type AgentState,
@@ -10,6 +11,7 @@ import {
   type SessionConfig,
   type SessionGroup,
   type Settings,
+  type SplitDir,
   type TabConfig,
 } from '@shared/types'
 import { ExplainPanel } from './ExplainPanel'
@@ -17,6 +19,7 @@ import { FontDialog } from './FontDialog'
 import { PromptDialog } from './PromptDialog'
 import { SessionDialog, type SessionDialogInitial, type SessionDialogMode, type SessionDialogResult } from './SessionDialog'
 import { Sidebar } from './Sidebar'
+import { SplitDividers } from './SplitDividers'
 import { StateBadge } from './StateBadge'
 import { TabBar } from './TabBar'
 import { TerminalSlot } from './TerminalSlot'
@@ -31,8 +34,10 @@ type DialogState =
       initial: SessionDialogInitial
       /** edit・duplicate: 対象のセッション。tab-*: タブを足す・変えるセッション */
       sessionId?: string
-      /** tab-edit: 変えるタブ。tab-new・tab-duplicate: このタブの後ろに足す */
+      /** tab-edit: 変えるタブ。tab-new・tab-duplicate: このタブの後ろに足す。tab-split: 分割するタブ */
       tabId?: string
+      /** tab-split: 分割の向き */
+      split?: SplitDir
     }
   | { kind: 'new-group'; moveSessionId?: string }
   | { kind: 'rename-group'; group: SessionGroup }
@@ -53,8 +58,9 @@ export function App() {
   /** 見ていないあいだに作業が終わった・確認待ちになったタブ（表示したら消える） */
   const [unread, setUnread] = useState<Record<string, true>>({})
   const statesRef = useRef<Record<string, AgentState>>({})
-  /** 表示しているタブ */
-  const selectedTabRef = useRef<string | null>(null)
+  /** 画面に出ているタブ（分割していればその全部） */
+  const visibleRef = useRef<string[]>([])
+  const termsRef = useRef<HTMLDivElement>(null)
   const [conns, setConns] = useState<Record<string, ConnEvent>>({})
   const [dialog, setDialog] = useState<DialogState>(null)
   const [explain, setExplain] = useState(false)
@@ -72,11 +78,11 @@ export function App() {
     terminals.setFont(s.font)
   }, [])
 
-  const markRead = useCallback((tabId: string | null) => {
-    if (!tabId) return
+  const markRead = useCallback((tabIds: string[]) => {
     setUnread((u) => {
-      if (!u[tabId]) return u
-      const { [tabId]: _r, ...rest } = u
+      if (!tabIds.some((id) => u[id])) return u
+      const rest = { ...u }
+      for (const id of tabIds) delete rest[id]
       return rest
     })
   }, [])
@@ -119,11 +125,11 @@ export function App() {
       setStates(statesRef.current)
       // 見ていないあいだに作業が終わった（作業中 → 入力待ち）・確認待ちになったら未読にする
       const done = (state === 'idle' && prev === 'working') || (state === 'blocked' && prev !== 'blocked')
-      const watching = selectedTabRef.current === id && document.hasFocus()
+      const watching = visibleRef.current.includes(id) && document.hasFocus()
       if (done && !watching) setUnread((u) => ({ ...u, [id]: true }))
     })
     // ウィンドウに戻ってきたら、表示しているタブは既読にする
-    const onFocus = (): void => markRead(selectedTabRef.current)
+    const onFocus = (): void => markRead(visibleRef.current)
     window.addEventListener('focus', onFocus)
     const offConn = terminals.onConn((ev) => setConns((c) => ({ ...c, [ev.id]: ev })))
     const offSelect = api.onSelectSession((sessionId, tabId) => show(sessionId, tabId))
@@ -142,15 +148,23 @@ export function App() {
   const activeTab = (s: SessionConfig): TabConfig => s.tabs.find((t) => t.id === activeTabs[s.id]) ?? s.tabs[0]
   const tab = selected ? activeTab(selected) : null
   const tabId = tab?.id ?? null
+  /** 表示しているタブが分割に入っていれば、その並び */
+  const view = useMemo(() => {
+    const tree = selected && tabId ? findSplit(selected.splits, tabId) : undefined
+    return tree ? paneLayout(tree) : null
+  }, [selected, tabId])
+  const visibleIds = view ? view.panes.map((p) => p.tabId) : tabId ? [tabId] : []
+  const visibleKey = visibleIds.join(',')
 
   // 選択を main に知らせ、端末にフォーカスを移す
   useEffect(() => {
     if (!loaded) return
-    api.reportSelected(selectedId, tabId)
-    selectedTabRef.current = tabId
-    if (document.hasFocus()) markRead(tabId)
+    const ids = visibleKey ? visibleKey.split(',') : []
+    api.reportSelected(selectedId, tabId, ids)
+    visibleRef.current = ids
+    if (document.hasFocus()) markRead(ids)
     if (tabId) requestAnimationFrame(() => terminals.focus(tabId))
-  }, [selectedId, tabId, loaded, markRead])
+  }, [selectedId, tabId, visibleKey, loaded, markRead])
 
   const secs = useMemo(() => toSections(layout), [layout])
 
@@ -240,6 +254,49 @@ export function App() {
     [saveScreen, step, stepTab, newSession, newTab, selected],
   )
 
+  // 端末の右クリックメニューの「右に分割・下に分割・分割から外す」
+  useEffect(
+    () =>
+      terminals.onPaneMenu(({ id, action }) => {
+        const s = sessions.find((x) => x.tabs.some((t) => t.id === id))
+        const t = s?.tabs.find((x) => x.id === id)
+        if (!s || !t) return
+        if (action.type === 'unsplit') {
+          void api.unsplitTab(id).then(setLayout)
+          return
+        }
+        show(s.id, id)
+        // 分割した端末の設定を写したダイアログを出す（名前は空にする）
+        setDialog({
+          kind: 'session',
+          mode: 'tab-split',
+          initial: { tab: { ...tabInput(t), name: '' } },
+          sessionId: s.id,
+          tabId: id,
+          split: action.dir,
+        })
+      }),
+    [sessions, show],
+  )
+
+  // 分割の区切りのドラッグ。動かしているあいだは画面だけ変え、離したら保存する
+  const dragSplits = useRef<{ sessionId: string; splits: SessionConfig['splits'] } | null>(null)
+  const moveDivider = useCallback(
+    (path: PanePath, ratio: number) => {
+      if (!selected || !view) return
+      const root = view.panes[0].tabId
+      const splits = setRatio(selected.splits, root, path, ratio)
+      dragSplits.current = { sessionId: selected.id, splits }
+      setLayout((l) => ({ ...l, sessions: l.sessions.map((x) => (x.id === selected.id ? { ...x, splits } : x)) }))
+    },
+    [selected, view],
+  )
+  const commitDivider = useCallback(() => {
+    const d = dragSplits.current
+    dragSplits.current = null
+    if (d) void api.setSplits(d.sessionId, d.splits).then(setLayout)
+  }, [])
+
   /** タブを忘れる（端末を閉じ、状態・未読・接続を消す） */
   function forgetTabs(ids: string[]) {
     if (ids.length === 0) return
@@ -279,6 +336,12 @@ export function App() {
       case 'tab-new':
       case 'tab-duplicate': {
         const { tab, layout } = await api.addTab(dialog.sessionId!, r.tab, dialog.tabId ?? null)
+        setLayout(layout)
+        show(dialog.sessionId!, tab.id)
+        break
+      }
+      case 'tab-split': {
+        const { tab, layout } = await api.splitTab(dialog.sessionId!, r.tab, dialog.tabId!, dialog.split ?? 'row')
         setLayout(layout)
         show(dialog.sessionId!, tab.id)
         break
@@ -444,6 +507,7 @@ export function App() {
               states={states}
               unread={unread}
               conns={conns}
+              visibleIds={visibleIds}
               onSelect={(id) => show(selected.id, id)}
               onMenu={(t) => void tabMenu(selected, t)}
               onNew={() => newTab(selected)}
@@ -451,10 +515,40 @@ export function App() {
           </>
         ) : null}
         {tab && explain ? <ExplainPanel tab={tab} committed={state} /> : null}
-        <div className="terms">
+        <div className="terms" ref={termsRef}>
           {sessions.flatMap((s) =>
-            s.tabs.map((t) => <TerminalSlot key={t.id} tab={t} visible={s.id === selectedId && t.id === tabId} />),
+            s.tabs.map((t) => {
+              const shown = s.id === selectedId
+              const rect = !shown
+                ? null
+                : view
+                  ? (view.panes.find((p) => p.tabId === t.id)?.rect ?? null)
+                  : t.id === tabId
+                    ? { x: 0, y: 0, w: 1, h: 1 }
+                    : null
+              const inView = !!view && rect !== null
+              return (
+                <TerminalSlot
+                  key={t.id}
+                  tab={t}
+                  rect={rect}
+                  split={inView}
+                  focused={inView && t.id === tabId}
+                  onActivate={() => {
+                    if (inView && t.id !== tabId) show(s.id, t.id)
+                  }}
+                />
+              )
+            }),
           )}
+          {view ? (
+            <SplitDividers
+              dividers={view.dividers}
+              container={termsRef.current}
+              onMove={moveDivider}
+              onCommit={commitDivider}
+            />
+          ) : null}
           {loaded && sessions.length === 0 ? (
             <div className="empty">
               <p>セッションがありません。</p>

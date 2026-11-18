@@ -12,14 +12,17 @@ import {
   shell,
   type MenuItemConstructorOptions,
 } from 'electron'
-import type { GroupMenuAction, SessionMenuAction, TabMenuAction } from '@shared/api'
+import type { GroupMenuAction, SessionMenuAction, TabMenuAction, TerminalMenuAction } from '@shared/api'
+import { leaves } from '@shared/split'
 import {
   tabLabel,
   type AgentState,
   type FontSetting,
   type NewSessionInput,
   type NewTabInput,
+  type PaneNode,
   type SessionMeta,
+  type SplitDir,
   type TabConfig,
   type ThemeSetting,
 } from '@shared/types'
@@ -45,7 +48,8 @@ function main(): void {
 
   let win: BrowserWindow | null = null
   /** 表示しているタブ（通知を出すかの判断に使う） */
-  let selectedTabId: string | null = null
+  /** 画面に出ているタブ（分割していればその全部） */
+  let visibleTabIds: string[] = []
   /** タブごとの状態 */
   const states = new Map<string, AgentState>()
   // 通知は参照を持っておかないと GC されてクリックが効かなくなる
@@ -153,7 +157,7 @@ function main(): void {
     }
     if (prev === 'blocked') return
     // 見ている最中のセッションなら通知しない
-    const watching = win?.isFocused() && selectedTabId === id
+    const watching = win?.isFocused() && visibleTabIds.includes(id)
     if (watching) return
     const found = store.tab(id)
     if (!found) return
@@ -446,6 +450,31 @@ function main(): void {
     return picked
   })
 
+  // ---- 分割 ----
+  ipcMain.handle('tabs:split', (_e, sessionId: string, input: NewTabInput, targetId: string, dir: SplitDir) => {
+    const tab = store.splitTab(sessionId, input, targetId, dir === 'column' ? 'column' : 'row')
+    return { tab, layout: store.layout() }
+  })
+  ipcMain.handle('tabs:unsplit', (_e, id: string) => store.unsplitTab(id))
+  ipcMain.handle('sessions:splits', (_e, sessionId: string, splits: PaneNode[]) => store.setSplits(sessionId, splits))
+  ipcMain.handle('terminal:menu', async (_e, id: string, hasSelection: boolean): Promise<TerminalMenuAction> => {
+    const found = store.tab(id)
+    if (!win || !found) return null
+    const inSplit = found.session.splits.some((s) => leaves(s).includes(id))
+    return popup<NonNullable<TerminalMenuAction>>((choose) => [
+      { label: 'コピー', enabled: hasSelection === true, click: () => choose({ type: 'copy' }) },
+      { label: '貼り付け', click: () => choose({ type: 'paste' }) },
+      { type: 'separator' },
+      { label: '右に分割…', click: () => choose({ type: 'split', dir: 'row' }) },
+      { label: '下に分割…', click: () => choose({ type: 'split', dir: 'column' }) },
+      {
+        label: '分割から外す（別のタブにする）',
+        enabled: inSplit,
+        click: () => choose({ type: 'unsplit' }),
+      },
+    ])
+  })
+
   // ---- グループ ----
   ipcMain.handle('groups:create', (_e, name: string) => {
     const group = store.createGroup(name)
@@ -504,12 +533,12 @@ function main(): void {
   })
 
   ipcMain.on('state', (_e, id: string, state: AgentState) => onStateChanged(id, state))
-  ipcMain.on('selected', (_e, sessionId: string | null, tabId: string | null) => {
-    selectedTabId = tabId
+  ipcMain.on('selected', (_e, sessionId: string | null, _tabId: string | null, visibleIds: unknown) => {
+    visibleTabIds = Array.isArray(visibleIds) ? visibleIds.filter((v): v is string => typeof v === 'string') : []
     store.setSelected(sessionId)
-    if (tabId) {
-      notifications.get(tabId)?.close()
-      notifications.delete(tabId)
+    for (const id of visibleTabIds) {
+      notifications.get(id)?.close()
+      notifications.delete(id)
     }
   })
 

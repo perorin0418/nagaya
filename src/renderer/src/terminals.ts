@@ -7,6 +7,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
+import type { TerminalMenuAction } from '@shared/api'
 import { DEFAULT_FONT, fontFamilyCss } from '@shared/font'
 import { decodeOsc52 } from '@shared/osc52'
 import { compileRuleSet, detect, Stabilizer, type CompiledRuleSet, type DetectResult } from '@shared/detect'
@@ -72,6 +73,12 @@ interface Entry {
   reconnectTimer: number | null
 }
 
+/** 端末の右クリックメニューで選ばれた、分割の操作（App が処理する） */
+export interface PaneMenuEvent {
+  id: string
+  action: Extract<NonNullable<TerminalMenuAction>, { type: 'split' | 'unsplit' }>
+}
+
 export interface StateEvent {
   id: string
   state: AgentState
@@ -91,6 +98,7 @@ class TerminalManager {
   private stateListeners = new Set<Listener<StateEvent>>()
   private detailListeners = new Set<Listener<{ id: string; result: DetectResult | null }>>()
   private connListeners = new Set<Listener<ConnEvent>>()
+  private paneMenuListeners = new Set<Listener<PaneMenuEvent>>()
   private explainId: string | null = null
   private font: FontSetting = { ...DEFAULT_FONT }
 
@@ -289,14 +297,9 @@ class TerminalManager {
     })
     el.addEventListener('dblclick', copySelection)
     el.addEventListener('contextmenu', (ev) => {
-      // 右クリック: 選択があればコピー、なければ貼り付け（Windows Terminal と同じ）
+      // 右クリック: メニュー（コピー・貼り付け・分割）を出す
       ev.preventDefault()
-      if (term.hasSelection()) {
-        api.clipboardWrite(term.getSelection())
-        term.clearSelection()
-      } else {
-        void this.paste(entry)
-      }
+      void this.contextMenu(entry)
     })
 
     this.fitEntry(entry)
@@ -331,6 +334,29 @@ class TerminalManager {
       return false
     }
     return true
+  }
+
+  private async contextMenu(e: Entry): Promise<void> {
+    // メニューを出しているあいだに選択が変わることがあるので、先に取っておく
+    const selection = e.term.hasSelection() ? e.term.getSelection() : ''
+    const action = await api.terminalMenu(e.id, selection !== '')
+    if (!action) return
+    if (action.type === 'copy') {
+      if (selection) api.clipboardWrite(selection)
+      e.term.clearSelection()
+      e.term.focus()
+    } else if (action.type === 'paste') {
+      await this.paste(e)
+      e.term.focus()
+    } else {
+      this.paneMenuListeners.forEach((l) => l({ id: e.id, action }))
+    }
+  }
+
+  /** 端末の右クリックメニューで分割の操作が選ばれたとき */
+  onPaneMenu(l: Listener<PaneMenuEvent>): () => void {
+    this.paneMenuListeners.add(l)
+    return () => this.paneMenuListeners.delete(l)
   }
 
   private async paste(e: Entry): Promise<void> {

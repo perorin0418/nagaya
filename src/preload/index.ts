@@ -23,6 +23,11 @@ const api: NagayaApi = {
   removeTab: (id) => ipcRenderer.invoke('tabs:remove', id),
   tabMenu: (id) => ipcRenderer.invoke('tabs:menu', id),
 
+  splitTab: (sessionId, input, targetId, dir) => ipcRenderer.invoke('tabs:split', sessionId, input, targetId, dir),
+  unsplitTab: (id) => ipcRenderer.invoke('tabs:unsplit', id),
+  setSplits: (sessionId, splits) => ipcRenderer.invoke('sessions:splits', sessionId, splits),
+  terminalMenu: (id, hasSelection) => ipcRenderer.invoke('terminal:menu', id, hasSelection),
+
   createGroup: (name) => ipcRenderer.invoke('groups:create', name),
   renameGroup: (id, name) => ipcRenderer.invoke('groups:rename', id, name),
   removeGroup: (id) => ipcRenderer.invoke('groups:remove', id),
@@ -47,7 +52,7 @@ const api: NagayaApi = {
   onSettingsChanged: (cb) => on('settings:changed', cb),
 
   reportState: (id, state) => ipcRenderer.send('state', id, state),
-  reportSelected: (sessionId, tabId) => ipcRenderer.send('selected', sessionId, tabId),
+  reportSelected: (sessionId, tabId, visibleIds) => ipcRenderer.send('selected', sessionId, tabId, visibleIds),
   onSelectSession: (cb) => on('select-session', cb),
   onMenu: (cb) => on('menu', cb),
 
