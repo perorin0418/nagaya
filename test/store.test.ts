@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { parseStore } from '../src/main/store'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { parseStore, SessionStore } from '../src/main/store'
+import { leaves } from '../src/shared/split'
 
 describe('parseStore（保存ファイルの読み込み）', () => {
   it('版 1 はホストごとのグループに移す', () => {
@@ -97,5 +101,51 @@ describe('タブ（版 3）', () => {
     expect(tabs[1].id).not.toBe('t1')
     expect(tabs[0].agent).toBe('claude')
     expect(tabs[1].agent).toBe('')
+  })
+
+  it('分割は、知らないタブを外して読む（分割のない版 3 の保存ファイルは分割なし）', () => {
+    const d = parseStore({
+      version: 3,
+      groups: [],
+      sessions: [
+        {
+          id: 'a',
+          name: 'x',
+          groupId: null,
+          tabs: [{ id: 't1' }, { id: 't2' }, { id: 't3' }],
+          splits: [{ dir: 'row', ratio: 0.5, a: { tabId: 't1' }, b: { dir: 'column', ratio: 0.5, a: { tabId: 'gone' }, b: { tabId: 't3' } } }],
+        },
+        { id: 'b', name: 'y', groupId: null, tabs: [{ id: 'u1' }] },
+      ],
+    })
+    expect(d.sessions[0].splits).toEqual([{ dir: 'row', ratio: 0.5, a: { tabId: 't1' }, b: { tabId: 't3' } }])
+    expect(d.sessions[1].splits).toEqual([])
+  })
+})
+
+describe('SessionStore の分割', () => {
+  const tab = { name: '', host: '', command: '', cwd: '', agent: 'claude', autoReconnect: true, reconnectCommand: '' }
+  const newStore = () => new SessionStore(join(mkdtempSync(join(tmpdir(), 'nagaya-test-')), 'sessions.json'))
+
+  it('分割すると、タブが後ろに足され、組ができる', () => {
+    const store = newStore()
+    const s = store.create({ name: 's', groupId: null, tab })
+    const a = s.tabs[0].id
+    const b = store.splitTab(s.id, tab, a, 'row')
+    const c = store.splitTab(s.id, tab, a, 'column')
+    const got = store.get(s.id)!
+    expect(got.tabs.map((t) => t.id)).toEqual([a, c.id, b.id])
+    expect(leaves(got.splits[0])).toEqual([a, c.id, b.id])
+  })
+
+  it('タブを閉じると分割からも外れる。複製すると新しいタブの id で組ができる', () => {
+    const store = newStore()
+    const s = store.create({ name: 's', groupId: null, tab })
+    const a = s.tabs[0].id
+    const b = store.splitTab(s.id, tab, a, 'row')
+    const dup = store.duplicate(s.id, { name: 'copy', groupId: null })
+    expect(leaves(dup.splits[0])).toEqual(dup.tabs.map((t) => t.id))
+    store.removeTab(b.id)
+    expect(store.get(s.id)!.splits).toEqual([])
   })
 })

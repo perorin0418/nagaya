@@ -3,15 +3,18 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'node:path'
 import { DEFAULT_FONT, normalizeFont } from '@shared/font'
 import { moveGroup, moveSession, removeGroup } from '@shared/layout'
+import { normalizeSplits, renameTabs, splitTab, unsplitTab } from '@shared/split'
 import type {
   FontSetting,
   Layout,
   NewSessionInput,
   NewTabInput,
+  PaneNode,
   SessionConfig,
   SessionGroup,
   SessionMeta,
   Settings,
+  SplitDir,
   TabConfig,
   ThemeSetting,
 } from '@shared/types'
@@ -28,7 +31,11 @@ interface StoreFile {
 
 const THEMES: ThemeSetting[] = ['system', 'light', 'dark']
 
-const cloneSession = (s: SessionConfig): SessionConfig => ({ ...s, tabs: s.tabs.map((t) => ({ ...t })) })
+const cloneSession = (s: SessionConfig): SessionConfig => ({
+  ...s,
+  tabs: s.tabs.map((t) => ({ ...t })),
+  splits: structuredClone(s.splits),
+})
 
 /** セッション一覧・グループ・設定を JSON ファイルに保存する */
 export class SessionStore {
@@ -150,8 +157,13 @@ export class SessionStore {
   duplicate(id: string, meta: SessionMeta): SessionConfig {
     const src = this.get(id)
     if (!src) throw new Error('セッションが見つかりません')
+    const ids = new Map(src.tabs.map((t) => [t.id, randomUUID()]))
     const s = normalizeSession(
-      { ...meta, tabs: src.tabs.map((t) => ({ ...t, id: randomUUID() })) },
+      {
+        ...meta,
+        tabs: src.tabs.map((t) => ({ ...t, id: ids.get(t.id)! })),
+        splits: renameTabs(src.splits, ids),
+      },
       randomUUID(),
       this.groupIds(),
     )
@@ -186,6 +198,39 @@ export class SessionStore {
     return { ...tab }
   }
 
+  /** タブ targetId を dir の向きに分割し、新しいタブを右（下）に置く。タブの並びでは targetId の後ろに入れる */
+  splitTab(sessionId: string, input: NewTabInput, targetId: string, dir: SplitDir): TabConfig {
+    const s = this.get(sessionId)
+    if (!s || !s.tabs.some((t) => t.id === targetId)) throw new Error('タブが見つかりません')
+    const tab = this.addTab(sessionId, input, targetId)
+    s.splits = splitTab(s.splits, targetId, tab.id, dir)
+    this.save()
+    return tab
+  }
+
+  /** タブを分割から外す（タブは残る） */
+  unsplitTab(tabId: string): Layout {
+    const found = this.tab(tabId)
+    if (found) {
+      found.session.splits = unsplitTab(found.session.splits, tabId)
+      this.save()
+    }
+    return this.layout()
+  }
+
+  /** 分割の配置を置き換える（区切りを動かしたとき。形は直してから入れる） */
+  setSplits(sessionId: string, splits: PaneNode[]): Layout {
+    const s = this.get(sessionId)
+    if (s) {
+      s.splits = normalizeSplits(
+        splits,
+        s.tabs.map((t) => t.id),
+      )
+      this.save()
+    }
+    return this.layout()
+  }
+
   updateTab(cfg: TabConfig): Layout {
     const found = this.tab(cfg.id)
     if (!found) throw new Error('タブが見つかりません')
@@ -200,6 +245,7 @@ export class SessionStore {
     const found = this.tab(tabId)
     if (found && found.session.tabs.length > 1) {
       found.session.tabs = found.session.tabs.filter((t) => t.id !== tabId)
+      found.session.splits = unsplitTab(found.session.splits, tabId)
       this.save()
     }
     return this.layout()
@@ -280,7 +326,11 @@ export function normalizeSession(
     const { name: _n, ...legacy } = s
     tabs.push(normalizeTab({ ...legacy, name: '' } as Partial<TabConfig>, randomUUID()))
   }
-  return { id, name: str(s.name) || '無題', groupId, tabs }
+  const splits = normalizeSplits(
+    s.splits,
+    tabs.map((t) => t.id),
+  )
+  return { id, name: str(s.name) || '無題', groupId, tabs, splits }
 }
 
 /** 保存ファイルを読む。版 1（ホストでまとめていたころ）は、ホストごとのグループに移す */

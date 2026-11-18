@@ -8,13 +8,15 @@ interface Props {
   states: Record<string, AgentState>
   unread: Record<string, true>
   conns: Record<string, ConnEvent>
+  /** 画面に出ているタブ（分割していればその全部） */
+  visibleIds: string[]
   onSelect(id: string): void
   onMenu(tab: TabConfig): void
   onNew(): void
 }
 
 /** 端末の上のタブ列（状態の点・未読の印つき） */
-export function TabBar({ tabs, activeId, states, unread, conns, onSelect, onMenu, onNew }: Props) {
+export function TabBar({ tabs, activeId, states, unread, conns, visibleIds, onSelect, onMenu, onNew }: Props) {
   return (
     <div className="tabs" role="tablist">
       {tabs.map((t) => {
@@ -25,7 +27,7 @@ export function TabBar({ tabs, activeId, states, unread, conns, onSelect, onMenu
             key={t.id}
             role="tab"
             aria-selected={t.id === activeId}
-            className={`tab${t.id === activeId ? ' active' : ''}${unread[t.id] ? ' unread' : ''}`}
+            className={`tab${t.id === activeId ? ' active' : ''}${t.id !== activeId && visibleIds.includes(t.id) ? ' in-view' : ''}${unread[t.id] ? ' unread' : ''}`}
             onClick={() => onSelect(t.id)}
             onContextMenu={(e) => {
               e.preventDefault()

@@ -10,6 +10,7 @@ function s(id: string, groupId: string | null): SessionConfig {
     tabs: [
       { id: `${id}-t`, name: '', host: '', command: '', cwd: '', agent: 'claude', autoReconnect: true, reconnectCommand: '' },
     ],
+    splits: [],
   }
 }
 

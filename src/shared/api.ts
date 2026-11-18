@@ -4,12 +4,14 @@ import type {
   Layout,
   NewSessionInput,
   NewTabInput,
+  PaneNode,
   PtyExit,
   RulesPayload,
   SessionConfig,
   SessionGroup,
   SessionMeta,
   Settings,
+  SplitDir,
   TabConfig,
 } from './types'
 
@@ -26,6 +28,14 @@ export type SessionMenuAction =
 
 /** タブの右クリックメニューで選ばれた操作（閉じるは確認済み） */
 export type TabMenuAction = { type: 'edit' } | { type: 'duplicate' } | { type: 'restart' } | { type: 'close' } | null
+
+/** 端末の右クリックメニューで選ばれた操作 */
+export type TerminalMenuAction =
+  | { type: 'copy' }
+  | { type: 'paste' }
+  | { type: 'split'; dir: SplitDir }
+  | { type: 'unsplit' }
+  | null
 
 /** グループの右クリックメニューで選ばれた操作（削除は確認済み） */
 export type GroupMenuAction = { type: 'new-session' } | { type: 'rename' } | { type: 'delete' } | null
@@ -71,6 +81,20 @@ export interface NagayaApi {
   removeTab(id: string): Promise<Layout>
   tabMenu(id: string): Promise<TabMenuAction>
 
+  /** タブ targetId を dir の向きに分割し、新しいタブを右（下）に置く（タブの並びでは targetId の後ろ） */
+  splitTab(
+    sessionId: string,
+    input: NewTabInput,
+    targetId: string,
+    dir: SplitDir,
+  ): Promise<{ tab: TabConfig; layout: Layout }>
+  /** タブを分割から外す（タブは残る） */
+  unsplitTab(id: string): Promise<Layout>
+  /** 分割の配置を置き換える（区切りを動かしたとき） */
+  setSplits(sessionId: string, splits: PaneNode[]): Promise<Layout>
+  /** 端末の右クリックメニュー（hasSelection: 選択があるか） */
+  terminalMenu(id: string, hasSelection: boolean): Promise<TerminalMenuAction>
+
   createGroup(name: string): Promise<{ group: SessionGroup; layout: Layout }>
   renameGroup(id: string, name: string): Promise<Layout>
   removeGroup(id: string): Promise<Layout>
@@ -97,8 +121,11 @@ export interface NagayaApi {
 
   /** タブの確定した状態を main に知らせる（通知・タイトル用） */
   reportState(tabId: string, state: AgentState): void
-  /** 選択中のセッションと、表示しているタブを main に知らせる（通知を出すかの判断・保存用） */
-  reportSelected(sessionId: string | null, tabId: string | null): void
+  /**
+   * 選択中のセッションと、表示しているタブを main に知らせる（通知を出すかの判断・保存用）。
+   * visibleIds は画面に出ているタブ（分割していればその全部）
+   */
+  reportSelected(sessionId: string | null, tabId: string | null, visibleIds: string[]): void
   /** 通知のクリックなどで main からセッション（とタブ）の選択を求められたとき */
   onSelectSession(cb: (sessionId: string, tabId: string | null) => void): () => void
   /** メニューの「新しいセッション」など */
