@@ -59,6 +59,29 @@ const api: NagayaApi = {
   clipboardRead: () => ipcRenderer.invoke('clipboard:read'),
   clipboardWrite: (text) => ipcRenderer.send('clipboard:write', text),
   saveScreen: (defaultName, text) => ipcRenderer.invoke('screen:save', defaultName, text),
+  loadSavedScreen: (id) => ipcRenderer.invoke('screens:load', id),
+  onPopoutOpened: (cb) => on('popout:opened', cb),
+  onPopoutClosed: (cb) => on('popout:closed', cb),
+  onPopoutInput: (cb) => on('popout:input', cb),
+  onPopoutResize: (cb) => on('popout:resize', cb),
+  onPopoutFocus: (cb) => on('popout:focus', cb),
+  popoutRelay: (id, msg) => ipcRenderer.send('popout:relay', id, msg),
+  popoutClose: (id) => ipcRenderer.send('popout:close', id),
+  popoutShow: (id) => ipcRenderer.send('popout:show', id),
+  popoutReady: () => ipcRenderer.send('popout:ready'),
+  popoutInput: (data) => ipcRenderer.send('popout:input', data),
+  popoutResize: (cols, rows) => ipcRenderer.send('popout:resize', cols, rows),
+  popoutMenu: (hasSelection) => ipcRenderer.invoke('popout:menu', hasSelection),
+  onPopoutData: (cb) => on('popout:data', cb),
+  onCollectScreens: (cb) =>
+    on('screens:collect', () => {
+      let list: { id: string; data: string }[] = []
+      try {
+        list = cb()
+      } finally {
+        ipcRenderer.send('screens:collected', list)
+      }
+    }),
 }
 
 contextBridge.exposeInMainWorld('nagaya', api)

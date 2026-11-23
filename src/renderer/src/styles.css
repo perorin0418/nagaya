@@ -715,3 +715,42 @@ button:disabled {
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }
+
+/* ---- 別ウィンドウ ---- */
+/* 別ウィンドウ（タブ1枚だけ）の画面 */
+body.popout {
+  background: var(--term-bg);
+}
+body.popout #root {
+  padding: 8px 4px 4px 12px;
+}
+/* メインのウィンドウで、別ウィンドウに出しているタブの上に被せる */
+.popped-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #111110;
+  color: #b4b2a9;
+}
+.popped-cover p {
+  margin: 0;
+}
+.popped-cover .buttons {
+  justify-content: center;
+}
+.popped-cover button {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: #e8e6df;
+  border-radius: 6px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.popped-cover button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}

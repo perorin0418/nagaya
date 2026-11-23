@@ -15,6 +15,7 @@ export function TerminalSlot({
   rect,
   split,
   focused,
+  popped,
   onActivate,
 }: {
   tab: TabConfig
@@ -23,6 +24,8 @@ export function TerminalSlot({
   split: boolean
   /** 分割の中で、操作の対象になっているか */
   focused: boolean
+  /** 別ウィンドウで開いているか（このウィンドウでは黒く隠す） */
+  popped: boolean
   /** クリックで操作の対象にする */
   onActivate: () => void
 }) {
@@ -45,6 +48,16 @@ export function TerminalSlot({
       aria-hidden={!rect}
       // 右クリックでも対象を移す（メニューの操作はクリックした端末に効く）
       onMouseDown={onActivate}
-    />
+    >
+      {popped ? (
+        <div className="popped-cover">
+          <p>このタブは別のウィンドウで開いています</p>
+          <div className="buttons">
+            <button onClick={() => window.nagaya.popoutShow(tab.id)}>ウィンドウを前に出す</button>
+            <button onClick={() => window.nagaya.popoutClose(tab.id)}>このウィンドウに戻す</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }

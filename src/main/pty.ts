@@ -59,6 +59,11 @@ export class PtyManager {
     private readonly onExit: ExitListener,
   ) {}
 
+  /** 動いているプロセスの数 */
+  get count(): number {
+    return this.ptys.size
+  }
+
   has(id: string): boolean {
     return this.ptys.has(id)
   }

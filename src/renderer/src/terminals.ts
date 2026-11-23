@@ -4,9 +4,10 @@
  * 状態の判定もここで行う（非表示のセッションも判定を続ける）。
  */
 import { FitAddon } from '@xterm/addon-fit'
+import { SerializeAddon } from '@xterm/addon-serialize'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { Terminal, type ITheme } from '@xterm/xterm'
+import { Terminal, type IMarker } from '@xterm/xterm'
 import type { TerminalMenuAction } from '@shared/api'
 import { DEFAULT_FONT, fontFamilyCss } from '@shared/font'
 import { decodeOsc52 } from '@shared/osc52'
@@ -16,8 +17,10 @@ import {
   type AgentState,
   type FontSetting,
   type RulesPayload,
+  type SavedScreen,
   type TabConfig,
 } from '@shared/types'
+import { darkQuery, termTheme } from './termTheme'
 
 const api = window.nagaya
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -27,22 +30,7 @@ const RECONNECT_DELAYS = [2, 5, 10, 20, 30]
 /** これより長くつながっていたら、再接続の回数を数え直す */
 const RECONNECT_RESET_MS = 60_000
 
-const LIGHT: ITheme = {
-  background: '#ffffff',
-  foreground: '#2c2c2a',
-  cursor: '#2c2c2a',
-  cursorAccent: '#ffffff',
-  selectionBackground: 'rgba(55,138,221,.30)',
-}
-const DARK: ITheme = {
-  background: '#1a1a19',
-  foreground: '#e8e6df',
-  cursor: '#e8e6df',
-  cursorAccent: '#1a1a19',
-  selectionBackground: 'rgba(55,138,221,.40)',
-}
-const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
-const theme = (): ITheme => (darkQuery.matches ? DARK : LIGHT)
+const theme = termTheme
 
 /** 端末の中のプロセスの状態 */
 export type ConnStatus = 'running' | 'exited' | 'reconnecting'
@@ -61,6 +49,7 @@ interface Entry {
   cfg: TabConfig
   term: Terminal
   fit: FitAddon
+  serialize: SerializeAddon
   el: HTMLDivElement
   running: boolean
   dirty: boolean
@@ -71,12 +60,30 @@ interface Entry {
   startedAt: number
   attempt: number
   reconnectTimer: number | null
+  /** 前回の表示を戻している最中か（終わるまで起動しない） */
+  restoring: boolean
+  /**
+   * 戻した前回の表示の、次の行。これより上は判定に使わない（前回の確認待ちの画面などで誤判定しないように）。
+   * スクロールバックから押し出されると isDisposed になり、そのときは全部を判定に使う
+   */
+  floor: IMarker | null
+  /** 別ウィンドウで開いているか（このウィンドウでは隠し、大きさは別ウィンドウに合わせる） */
+  popped: boolean
+  /** 別ウィンドウに開いた時点の表示を送るまで、その後に書いたものを溜めておく */
+  pending: string[] | null
 }
 
 /** 端末の右クリックメニューで選ばれた、分割の操作（App が処理する） */
 export interface PaneMenuEvent {
   id: string
   action: Extract<NonNullable<TerminalMenuAction>, { type: 'split' | 'unsplit' }>
+}
+
+export interface PopoutEvent {
+  id: string
+  popped: boolean
+  /** 別ウィンドウが前面にあるか */
+  focused: boolean
 }
 
 export interface StateEvent {
@@ -106,7 +113,7 @@ class TerminalManager {
     api.onPtyData((id, data) => {
       const e = this.entries.get(id)
       if (!e) return
-      e.term.write(data, () => {
+      this.write(e, data, () => {
         e.dirty = true
       })
     })
@@ -115,6 +122,131 @@ class TerminalManager {
       for (const e of this.entries.values()) e.term.options.theme = theme()
     })
     setInterval(() => this.tick(), DETECT_INTERVAL_MS)
+    api.onCollectScreens(() => this.serializeAll())
+    api.onPopoutOpened((id) => this.popoutOpened(id))
+    api.onPopoutClosed((id) => this.popoutClosed(id))
+    api.onPopoutInput((id, data) => {
+      const e = this.entries.get(id)
+      // このウィンドウで打ったのと同じ扱いにする（Enter で起動し直す・再接続なども効く）
+      if (e?.popped) e.term.input(data, true)
+    })
+    api.onPopoutResize((id, cols, rows) => {
+      const e = this.entries.get(id)
+      if (!e?.popped || (e.term.cols === cols && e.term.rows === rows)) return
+      e.term.resize(cols, rows)
+      if (e.running) api.ptyResize(id, cols, rows)
+      e.dirty = true
+    })
+    api.onPopoutFocus((id, focused) => {
+      if (focused) this.popoutFocused.add(id)
+      else this.popoutFocused.delete(id)
+      this.popoutListeners.forEach((l) => l({ id, popped: this.entries.get(id)?.popped ?? false, focused }))
+    })
+  }
+
+  /** 端末に書く。別ウィンドウで開いていれば、そちらにも送る */
+  private write(e: Entry, data: string, cb?: () => void): void {
+    e.term.write(data, cb)
+    this.relay(e, data)
+  }
+
+  private relay(e: Entry, data: string): void {
+    if (!e.popped) return
+    if (e.pending) e.pending.push(data)
+    else api.popoutRelay(e.id, { type: 'data', data })
+  }
+
+  // ---- 別ウィンドウ ----
+
+  private popoutFocused = new Set<string>()
+  private popoutListeners = new Set<Listener<PopoutEvent>>()
+
+  private popoutOpened(id: string): void {
+    const e = this.entries.get(id)
+    if (!e) return
+    e.popped = true
+    // 今までに書いたものが反映されてから、その時点の表示を送る。それまでに書いたものは pending に溜めて後から送る
+    const pending: string[] = []
+    e.pending = pending
+    e.term.write('', () => {
+      if (e.pending !== pending) return
+      api.popoutRelay(id, { type: 'snapshot', data: e.serialize.serialize(), cols: e.term.cols, rows: e.term.rows })
+      for (const data of pending) api.popoutRelay(id, { type: 'data', data })
+      e.pending = null
+    })
+    this.popoutListeners.forEach((l) => l({ id, popped: true, focused: false }))
+  }
+
+  private popoutClosed(id: string): void {
+    this.popoutFocused.delete(id)
+    const e = this.entries.get(id)
+    if (!e) return
+    e.popped = false
+    e.pending = null
+    this.fitEntry(e) // このウィンドウの大きさに戻す
+    this.popoutListeners.forEach((l) => l({ id, popped: false, focused: false }))
+  }
+
+  /** 別ウィンドウで開いた・閉じた・前面に来たとき */
+  onPopout(l: Listener<PopoutEvent>): () => void {
+    this.popoutListeners.add(l)
+    return () => this.popoutListeners.delete(l)
+  }
+
+  isPopped(id: string): boolean {
+    return this.entries.get(id)?.popped ?? false
+  }
+
+  /** 別ウィンドウで開いていて、そのウィンドウが前面にあるか */
+  isPopoutFocused(id: string): boolean {
+    return this.popoutFocused.has(id)
+  }
+
+  // ---- 終了したときの表示を残す・戻す ----
+
+  /** すべての端末の表示を書き出す（終了する前にメインから呼ばれる） */
+  private serializeAll(): { id: string; data: string }[] {
+    const out: { id: string; data: string }[] = []
+    for (const e of this.entries.values()) {
+      try {
+        // 代替画面（vim など）とモード（マウス操作など）は戻さない。戻すのは見た目だけ
+        out.push({ id: e.id, data: e.serialize.serialize({ excludeAltBuffer: true, excludeModes: true }) })
+      } catch {
+        // 1枚書き出せなくても、ほかのタブは残す
+      }
+    }
+    return out
+  }
+
+  /** 前回の表示を戻してから、プロセスを起動する */
+  private async restoreThenStart(e: Entry): Promise<void> {
+    e.restoring = true
+    try {
+      const saved = await api.loadSavedScreen(e.id).catch(() => null)
+      if (saved && this.entries.get(e.id) === e) await this.restoreScreen(e, saved)
+    } finally {
+      e.restoring = false
+    }
+    if (this.entries.get(e.id) === e) await this.start(e.id)
+  }
+
+  private restoreScreen(e: Entry, saved: SavedScreen): Promise<void> {
+    return new Promise((resolve) => {
+      this.write(e, saved.data, () => {
+        // カーソルを、戻した表示の最後の行の次へ動かす（途中に残っていると、新しい出力が前回の表示を上書きする）
+        const buf = e.term.buffer.active
+        let last = buf.length - 1
+        while (last >= 0 && (buf.getLine(last)?.translateToString(true).trim() ?? '') === '') last--
+        const row = last - buf.baseY
+        const move = row >= 0 ? `\x1b[${row + 1};1H\r\n` : '\x1b[H'
+        const at = new Date(saved.savedAt).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' })
+        this.write(e, `\x1b[0m${move}\x1b[2m── ここまで前回の表示（${at} に終了）──\x1b[0m\r\n`, () => {
+          e.floor?.dispose()
+          e.floor = e.term.registerMarker(0) ?? null
+          resolve()
+        })
+      })
+    })
   }
 
   // ---- フォント ----
@@ -174,14 +306,14 @@ class TerminalManager {
       this.scheduleReconnect(e)
       return
     }
-    e.term.write(`\r\n\x1b[2m[プロセスが終了しました（終了コード ${exitCode}）。Enter で起動し直します]\x1b[0m\r\n`)
+    this.write(e, `\r\n\x1b[2m[プロセスが終了しました（終了コード ${exitCode}）。Enter で起動し直します]\x1b[0m\r\n`)
     this.emitConn({ id, status: 'exited' })
   }
 
   private scheduleReconnect(e: Entry): void {
     const delaySec = RECONNECT_DELAYS[Math.min(e.attempt, RECONNECT_DELAYS.length - 1)]
     e.attempt++
-    e.term.write(
+    this.write(e, 
       `\r\n\x1b[33m[接続が切れました（終了コード ${SSH_CONNECTION_ERROR}）。${delaySec} 秒後に再接続します（${e.attempt} 回目）。` +
         `Enter ですぐに再接続、Esc で中止]\x1b[0m\r\n`,
     )
@@ -203,7 +335,7 @@ class TerminalManager {
     const e = this.entries.get(id)
     if (!e || e.running) return
     this.clearReconnect(e)
-    e.term.write('\x1b[2m[再接続します…]\x1b[0m\r\n')
+    this.write(e, '\x1b[2m[再接続します…]\x1b[0m\r\n')
     await this.spawn(e, true)
   }
 
@@ -213,7 +345,7 @@ class TerminalManager {
     if (!e || e.reconnectTimer === null) return
     this.clearReconnect(e)
     e.attempt = 0
-    e.term.write('\x1b[2m[再接続をやめました。Enter で起動し直します]\x1b[0m\r\n')
+    this.write(e, '\x1b[2m[再接続をやめました。Enter で起動し直します]\x1b[0m\r\n')
     this.emitConn({ id, status: 'exited' })
   }
 
@@ -244,6 +376,8 @@ class TerminalManager {
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    const serialize = new SerializeAddon()
+    term.loadAddon(serialize)
     term.loadAddon(new Unicode11Addon())
     term.loadAddon(new WebLinksAddon((_e, uri) => openLink(uri))) // 文字のままの URL もクリックで開く
     term.unicode.activeVersion = '11' // 日本語・絵文字の幅を Claude Code の想定に合わせる
@@ -254,6 +388,7 @@ class TerminalManager {
       cfg,
       term,
       fit,
+      serialize,
       el,
       running: false,
       dirty: false,
@@ -263,6 +398,10 @@ class TerminalManager {
       startedAt: 0,
       attempt: 0,
       reconnectTimer: null,
+      restoring: false,
+      floor: null,
+      popped: false,
+      pending: null,
     }
     this.entries.set(id, entry)
     entry.observer.observe(el)
@@ -274,7 +413,7 @@ class TerminalManager {
         // 再接続の待ち中: Enter ですぐ再接続、Esc で中止
         if (data === '\r') void this.reconnect(id)
         else if (data === '\x1b') this.cancelReconnect(id)
-      } else if (data === '\r') {
+      } else if (data === '\r' && !entry.restoring) {
         void this.start(id)
       }
     })
@@ -303,7 +442,7 @@ class TerminalManager {
     })
 
     this.fitEntry(entry)
-    void this.start(id)
+    void this.restoreThenStart(entry)
   }
 
   private handleKey(e: Entry, ev: KeyboardEvent): boolean {
@@ -365,6 +504,7 @@ class TerminalManager {
   }
 
   private fitEntry(e: Entry): void {
+    if (e.popped) return // 大きさは別ウィンドウに合わせる
     if (e.el.clientWidth === 0 || e.el.clientHeight === 0) return
     const before = `${e.term.cols}x${e.term.rows}`
     try {
@@ -394,7 +534,7 @@ class TerminalManager {
       e.running = true
       this.emitConn({ id: e.id, status: 'running' })
     } else {
-      e.term.write(`\r\n\x1b[31m起動できませんでした: ${r.error ?? ''}\x1b[0m\r\n\x1b[2m[Enter で再試行します]\x1b[0m\r\n`)
+      this.write(e, `\r\n\x1b[31m起動できませんでした: ${r.error ?? ''}\x1b[0m\r\n\x1b[2m[Enter で再試行します]\x1b[0m\r\n`)
       this.emitConn({ id: e.id, status: 'exited' })
     }
   }
@@ -405,6 +545,9 @@ class TerminalManager {
     api.ptyKill(id)
     e.running = false
     e.term.reset()
+    this.relay(e, '\x1bc') // 別ウィンドウの端末も消す
+    e.floor?.dispose()
+    e.floor = null
     await this.start(id)
   }
 
@@ -420,7 +563,7 @@ class TerminalManager {
 
   focus(id: string): void {
     const e = this.entries.get(id)
-    if (!e) return
+    if (!e || e.popped) return // 別ウィンドウで開いているあいだは、このウィンドウで打たせない
     this.fitEntry(e)
     e.term.focus()
   }
@@ -452,6 +595,15 @@ class TerminalManager {
     return out
   }
 
+  /** 判定に使う行（今の画面のうち、戻した前回の表示の行は空にする） */
+  private detectLines(e: Entry): string[] {
+    const lines = this.screenLines(e.id)
+    const floor = e.floor && !e.floor.isDisposed ? e.floor.line : -1
+    if (floor < 0) return lines
+    const base = e.term.buffer.active.baseY
+    return lines.map((l, i) => (base + i < floor ? '' : l))
+  }
+
   private tick(): void {
     const now = performance.now()
     for (const e of this.entries.values()) {
@@ -459,7 +611,7 @@ class TerminalManager {
       if (e.dirty) {
         e.dirty = false
         const rs = this.ruleSets.get(e.cfg.agent)
-        e.last = rs ? detect(this.screenLines(e.id), rs) : null
+        e.last = rs ? detect(this.detectLines(e), rs) : null
         if (this.explainId === e.id) this.detailListeners.forEach((l) => l({ id: e.id, result: e.last }))
       }
       const changed = e.stabilizer.push(e.last?.state ?? 'unknown', now)
@@ -493,7 +645,7 @@ class TerminalManager {
     const e = id ? this.entries.get(id) : undefined
     if (e) {
       const rs = this.ruleSets.get(e.cfg.agent)
-      e.last = rs ? detect(this.screenLines(e.id), rs) : null
+      e.last = rs ? detect(this.detectLines(e), rs) : null
       l({ id: e.id, result: e.last })
     }
     return () => {
