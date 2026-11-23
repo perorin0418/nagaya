@@ -69,6 +69,8 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [font, setFont] = useState<FontSetting>(DEFAULT_FONT)
   const [toast, setToast] = useState<string | null>(null)
+  /** 別ウィンドウで開いているタブ */
+  const [popped, setPopped] = useState<Record<string, true>>({})
   const toastTimer = useRef<number | undefined>(undefined)
 
   const { sessions, groups } = layout
@@ -125,19 +127,31 @@ export function App() {
       setStates(statesRef.current)
       // 見ていないあいだに作業が終わった（作業中 → 入力待ち）・確認待ちになったら未読にする
       const done = (state === 'idle' && prev === 'working') || (state === 'blocked' && prev !== 'blocked')
-      const watching = visibleRef.current.includes(id) && document.hasFocus()
+      const watching = (visibleRef.current.includes(id) && document.hasFocus()) || terminals.isPopoutFocused(id)
       if (done && !watching) setUnread((u) => ({ ...u, [id]: true }))
     })
     // ウィンドウに戻ってきたら、表示しているタブは既読にする
     const onFocus = (): void => markRead(visibleRef.current)
     window.addEventListener('focus', onFocus)
     const offConn = terminals.onConn((ev) => setConns((c) => ({ ...c, [ev.id]: ev })))
+    const offPopout = terminals.onPopout(({ id, popped: p, focused }) => {
+      setPopped((cur) => {
+        if (!!cur[id] === p) return cur
+        const next = { ...cur }
+        if (p) next[id] = true
+        else delete next[id]
+        return next
+      })
+      // 別ウィンドウで見たら既読にする
+      if (focused) markRead([id])
+    })
     const offSelect = api.onSelectSession((sessionId, tabId) => show(sessionId, tabId))
     const offSettings = api.onSettingsChanged(applySettings)
     return () => {
       offRules()
       offState()
       offConn()
+      offPopout()
       offSelect()
       offSettings()
       window.removeEventListener('focus', onFocus)
@@ -534,6 +548,7 @@ export function App() {
                   rect={rect}
                   split={inView}
                   focused={inView && t.id === tabId}
+                  popped={!!popped[t.id]}
                   onActivate={() => {
                     if (inView && t.id !== tabId) show(s.id, t.id)
                   }}

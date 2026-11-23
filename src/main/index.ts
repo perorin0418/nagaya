@@ -12,7 +12,14 @@ import {
   shell,
   type MenuItemConstructorOptions,
 } from 'electron'
-import type { GroupMenuAction, SessionMenuAction, TabMenuAction, TerminalMenuAction } from '@shared/api'
+import type {
+  GroupMenuAction,
+  PopoutMenuAction,
+  PopoutMessage,
+  SessionMenuAction,
+  TabMenuAction,
+  TerminalMenuAction,
+} from '@shared/api'
 import { leaves } from '@shared/split'
 import {
   tabLabel,
@@ -21,6 +28,7 @@ import {
   type NewSessionInput,
   type NewTabInput,
   type PaneNode,
+  type SavedScreen,
   type SessionMeta,
   type SplitDir,
   type TabConfig,
@@ -29,12 +37,17 @@ import {
 import icon from '../../resources/icon.png?asset'
 import { defaultShell, PtyManager } from './pty'
 import { RulesLoader } from './rules'
+import { ScreenStore } from './screens'
+import { downloadUpdate, launchUpdater, selfUpdateUnsupported, takeUpdateResult } from './selfUpdate'
 import { SessionStore } from './store'
 import { UpdateChecker } from './update'
+import type { ReleaseInfo } from '@shared/version'
 
 const APP_ID = 'io.github.perorin0418.nagaya'
 /** 新しい版の通知を notifications に持つときのキー（タブの id とは重ならない） */
 const UPDATE_NOTIFICATION = 'update'
+/** 終了するときに、端末の表示を renderer から集めるのを待つ時間 */
+const COLLECT_SCREENS_TIMEOUT_MS = 3000
 
 // 2つ目を起動したら、1つ目のウィンドウを前に出して終わる（同じセッションが二重に起動しないように）
 if (!app.requestSingleInstanceLock()) {
@@ -58,6 +71,13 @@ function main(): void {
   const store = new SessionStore(join(app.getPath('userData'), 'sessions.json'))
   const bundledRules = app.isPackaged ? join(process.resourcesPath, 'rules') : join(app.getAppPath(), 'rules')
   const rules = new RulesLoader(bundledRules, join(app.getPath('userData'), 'rules'))
+  const screens = new ScreenStore(join(app.getPath('userData'), 'screens'))
+  /** 閉じてよいと決まったか（確認と表示の保存を終えてから閉じ直す） */
+  let closeReady = false
+  let preparingClose: Promise<boolean> | null = null
+  let savingScreens: Promise<void> | null = null
+  /** 別ウィンドウで開いているタブ（キーはタブの id）。ready までは送るものを queue に溜める */
+  const popouts = new Map<string, { win: BrowserWindow; ready: boolean; queue: PopoutMessage[] }>()
 
   // 新しい版が出ていないか、GitHub のリリースを6時間ごとに確かめる
   const updates = new UpdateChecker(app.getVersion(), (release) => {
@@ -65,7 +85,9 @@ function main(): void {
     if (!Notification.isSupported()) return
     const n = new Notification({
       title: `nagaya ${release.version} が出ています`,
-      body: `今の版は ${app.getVersion()} です。クリックでリリースのページを開きます。`,
+      body:
+        `今の版は ${app.getVersion()} です。クリックでリリースのページを開きます。` +
+        (!selfUpdateUnsupported() && release.winZip ? '「ヘルプ → 再起動して更新」でも更新できます。' : ''),
     })
     n.on('click', () => {
       notifications.delete(UPDATE_NOTIFICATION)
@@ -84,19 +106,115 @@ function main(): void {
     const r = await updates.check()
     if (!win) return
     if (r.type === 'newer') {
+      const canUpdate = !selfUpdateUnsupported() && r.release.winZip !== null
+      const buttons = canUpdate ? ['再起動して更新…', 'リリースのページを開く', '閉じる'] : ['リリースのページを開く', '閉じる']
       const { response } = await dialog.showMessageBox(win, {
         type: 'info',
-        buttons: ['リリースのページを開く', '閉じる'],
+        buttons,
         defaultId: 0,
-        cancelId: 1,
+        cancelId: buttons.length - 1,
         message: `nagaya ${r.release.version} が出ています`,
         detail: `今の版は ${app.getVersion()} です。`,
       })
-      if (response === 0) void shell.openExternal(r.release.url)
+      if (buttons[response] === '再起動して更新…') void updateAndRestart(r.release, false)
+      else if (buttons[response] === 'リリースのページを開く') void shell.openExternal(r.release.url)
     } else if (r.type === 'latest') {
       await dialog.showMessageBox(win, { type: 'info', message: '最新の版です', detail: `nagaya ${app.getVersion()}` })
     } else {
       await dialog.showMessageBox(win, { type: 'warning', message: '更新を確認できませんでした', detail: r.message })
+    }
+  }
+
+  /** 更新のダウンロードの進み具合（していなければ null） */
+  let updateProgress: number | null = null
+
+  /**
+   * 再起動して更新する。確認 → zip をダウンロード → 表示を残す → 更新のスクリプトを起動して終わる。
+   * confirmed が true なら、最初の確認を省く（すでに確かめたとき）
+   */
+  async function updateAndRestart(release: ReleaseInfo, confirmed: boolean): Promise<void> {
+    if (!win || updateProgress !== null) return
+    const unsupported = selfUpdateUnsupported() ?? (release.winZip ? null : 'このリリースには Windows 用の zip がありません')
+    if (unsupported) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning',
+        buttons: ['リリースのページを開く', '閉じる'],
+        defaultId: 0,
+        cancelId: 1,
+        message: '再起動して更新できません',
+        detail: `${unsupported}。リリースのページから入手してください。`,
+      })
+      if (response === 0) void shell.openExternal(release.url)
+      return
+    }
+    const asset = release.winZip!
+    if (!confirmed) {
+      const n = ptys.count
+      const ok = await confirm(
+        `nagaya ${release.version} に更新しますか？`,
+        `zip（${Math.round(asset.size / 1024 / 1024)} MB）をダウンロードしてから、nagaya を再起動します。` +
+          (n > 0 ? `\n動いているタブ（${n} 枚）のプロセスはすべて終了します（SSH が切れ、Claude Code も止まります）。` : '') +
+          (store.settings.keepScreen ? '\n端末の表示は、再起動したあとに出ます。' : ''),
+        '更新する',
+      )
+      if (!ok) return
+    }
+    updateProgress = 0
+    buildMenu()
+    let zip: string
+    try {
+      let shown = -1
+      zip = await downloadUpdate(asset, (ratio) => {
+        updateProgress = ratio
+        win?.setProgressBar(ratio)
+        const pct = Math.floor(ratio * 100)
+        if (pct !== shown && pct % 5 === 0) {
+          shown = pct
+          buildMenu()
+        }
+      })
+    } catch (e) {
+      updateProgress = null
+      win?.setProgressBar(-1)
+      buildMenu()
+      if (win) {
+        await dialog.showMessageBox(win, {
+          type: 'error',
+          message: '更新をダウンロードできませんでした',
+          detail: (e as Error).message,
+        })
+      }
+      return
+    }
+    win?.setProgressBar(-1)
+    // 閉じるときの確認は済んでいるので省き、表示を残してから終わる
+    await prepareClose(false)
+    try {
+      launchUpdater(zip, release.version)
+    } catch (e) {
+      closeReady = false
+      updateProgress = null
+      buildMenu()
+      if (win) await dialog.showMessageBox(win, { type: 'error', message: '更新を始められませんでした', detail: (e as Error).message })
+      return
+    }
+    app.quit()
+  }
+
+  /** 前回の更新の結果を知らせる（更新のあとに起動したとき） */
+  function reportUpdateResult(): void {
+    const r = takeUpdateResult()
+    if (!r || !win) return
+    if (r.type === 'ok') {
+      if (Notification.isSupported()) {
+        new Notification({ title: `nagaya ${app.getVersion()} に更新しました`, body: '' }).show()
+      }
+    } else {
+      void dialog.showMessageBox(win, {
+        type: 'error',
+        message: '更新できませんでした',
+        detail: `${r.message}\n今の版は ${app.getVersion()} です。`,
+      })
     }
   }
 
@@ -124,6 +242,80 @@ function main(): void {
     send('settings:changed', store.settings)
   }
 
+  /** 終了したときの画面を残すか。やめたら、残してある分も消す */
+  function setKeepScreen(keep: boolean): void {
+    store.setKeepScreen(keep)
+    if (!keep) screens.clear()
+    buildMenu()
+    send('settings:changed', store.settings)
+  }
+
+  /**
+   * renderer から端末の表示を集めて、ファイルに残す。
+   * 返ってこなければ（renderer が固まっているなど）COLLECT_SCREENS_TIMEOUT_MS で諦める
+   */
+  function saveScreens(): Promise<void> {
+    if (savingScreens) return savingScreens
+    savingScreens = new Promise<void>((resolve) => {
+      const w = win
+      if (!store.settings.keepScreen || !w || w.isDestroyed() || w.webContents.isCrashed()) return resolve()
+      const timer = setTimeout(done, COLLECT_SCREENS_TIMEOUT_MS)
+      function done(): void {
+        clearTimeout(timer)
+        ipcMain.removeListener('screens:collected', onCollected)
+        resolve()
+      }
+      function onCollected(e: Electron.IpcMainEvent, list: unknown): void {
+        if (e.sender !== w!.webContents) return
+        const keep = store.tabIds()
+        const savedAt = Date.now()
+        for (const item of Array.isArray(list) ? list : []) {
+          const { id, data } = (item ?? {}) as { id?: unknown; data?: unknown }
+          if (typeof id !== 'string' || typeof data !== 'string' || !keep.has(id)) continue
+          try {
+            screens.save(id, { data, savedAt })
+          } catch {
+            // 書けなくても終了は止めない
+          }
+        }
+        screens.prune(keep)
+        done()
+      }
+      ipcMain.on('screens:collected', onCollected)
+      w.webContents.send('screens:collect')
+    })
+    return savingScreens
+  }
+
+  /**
+   * 閉じる前の準備。動いているプロセスがあれば確認し、よければ表示を残す。
+   * 閉じてよければ true（キャンセルされたら false）
+   */
+  function prepareClose(confirmFirst = true): Promise<boolean> {
+    if (closeReady) return Promise.resolve(true)
+    if (preparingClose) return preparingClose
+    preparingClose = (async () => {
+      const n = ptys.count
+      if (confirmFirst && n > 0 && win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore()
+        win.show()
+        const ok = await confirm(
+          'nagaya を閉じますか？',
+          `動いているタブ（${n} 枚）のプロセスはすべて終了します（SSH が切れ、Claude Code も止まります）。` +
+            (store.settings.keepScreen ? '\n端末の表示は、次に起動したときに出ます。' : ''),
+          '閉じる',
+        )
+        if (!ok) return false
+      }
+      await saveScreens()
+      closeReady = true
+      return true
+    })().finally(() => {
+      preparingClose = null
+    })
+    return preparingClose
+  }
+
   function updateTitle(): void {
     if (!win) return
     const n = [...states.values()].filter((s) => s === 'blocked').length
@@ -131,6 +323,8 @@ function main(): void {
   }
 
   function showTab(sessionId: string, tabId: string): void {
+    const p = popouts.get(tabId)
+    if (p && !p.win.isDestroyed()) return focusWindow(p.win)
     if (!win) return
     if (win.isMinimized()) win.restore()
     win.show()
@@ -140,7 +334,9 @@ function main(): void {
 
   /** タブの状態を忘れる（タブ・セッションを消したとき） */
   function forgetTab(tabId: string): void {
+    closePopout(tabId)
     ptys.kill(tabId)
+    screens.remove(tabId)
     states.delete(tabId)
     notifications.get(tabId)?.close()
     notifications.delete(tabId)
@@ -150,6 +346,8 @@ function main(): void {
     const prev = states.get(id)
     states.set(id, state)
     updateTitle()
+    const pop = popouts.get(id)
+    if (pop && !pop.win.isDestroyed()) pop.win.setTitle(popoutTitle(id))
     if (state !== 'blocked') {
       notifications.get(id)?.close()
       notifications.delete(id)
@@ -157,8 +355,9 @@ function main(): void {
     }
     if (prev === 'blocked') return
     // 見ている最中のセッションなら通知しない
-    const watching = win?.isFocused() && visibleTabIds.includes(id)
+    const watching = (win?.isFocused() && visibleTabIds.includes(id)) || (pop && !pop.win.isDestroyed() && pop.win.isFocused())
     if (watching) return
+    if (pop && !pop.win.isDestroyed() && !pop.win.isFocused()) pop.win.flashFrame(true)
     const found = store.tab(id)
     if (!found) return
     const { session, tab } = found
@@ -244,6 +443,12 @@ function main(): void {
             })),
           },
           { label: '端末のフォント…', click: menu('font-settings') },
+          {
+            label: '終了したときの画面を次の起動でも出す',
+            type: 'checkbox',
+            checked: store.settings.keepScreen,
+            click: (item) => setKeepScreen(item.checked),
+          },
           { type: 'separator' },
           { role: 'resetZoom', label: '実際のサイズ' },
           { role: 'zoomIn', label: '拡大' },
@@ -275,6 +480,16 @@ function main(): void {
         submenu: [
           ...(updates.latest
             ? [
+                ...(updateProgress !== null
+                  ? [{ label: `nagaya ${updates.latest.version} をダウンロード中…（${Math.floor(updateProgress * 100)}%）`, enabled: false }]
+                  : !selfUpdateUnsupported() && updates.latest.winZip
+                    ? [
+                        {
+                          label: `再起動して nagaya ${updates.latest.version} に更新…`,
+                          click: () => void updateAndRestart(updates.latest!, false),
+                        },
+                      ]
+                    : []),
                 {
                   label: `nagaya ${updates.latest.version} を入手…`,
                   click: () => void shell.openExternal(updates.latest!.url),
@@ -291,6 +506,9 @@ function main(): void {
   }
 
   function createWindow(): void {
+    // macOS ではウィンドウを閉じた後に開き直せるので、閉じるたびに表示を残し直す
+    closeReady = false
+    savingScreens = null
     win = new BrowserWindow({
       width: 1280,
       height: 800,
@@ -301,14 +519,12 @@ function main(): void {
       // Windows・macOS の配布物は実行ファイルのアイコンが使われる。開発中と Linux 用にここでも指定する
       icon,
       show: false,
-      webPreferences: {
-        preload: join(__dirname, '../preload/index.js'),
-        contextIsolation: true,
-        sandbox: true,
-        nodeIntegration: false,
-      },
+      webPreferences: webPreferences(),
     })
-    win.on('ready-to-show', () => win?.show())
+    win.on('ready-to-show', () => {
+      win?.show()
+      reportUpdateResult()
+    })
     win.on('focus', () => win?.flashFrame(false))
     win.webContents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || input.alt) return
@@ -319,19 +535,122 @@ function main(): void {
       event.preventDefault()
       runAction(hit.action)
     })
+    // 閉じる前に確認し、端末の表示を残す（終えたら閉じ直す）
+    win.on('close', (ev) => {
+      if (closeReady) return
+      ev.preventDefault()
+      void prepareClose().then((ok) => {
+        if (ok) win?.close()
+      })
+    })
     win.on('closed', () => {
       win = null
+      // 別ウィンドウはメインのウィンドウがないと動かない（判定・入力はメインのウィンドウが受け持つ）
+      for (const p of popouts.values()) if (!p.win.isDestroyed()) p.win.destroy()
+      popouts.clear()
     })
+    loadRenderer(win)
+  }
+
+  function webPreferences(): Electron.WebPreferences {
+    return {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    }
+  }
+
+  /** 画面を読み込む。popout を渡すと、そのタブだけを出す別ウィンドウの画面になる */
+  function loadRenderer(w: BrowserWindow, popout?: string): void {
     // 外部リンクはブラウザで開く（http・https・mailto だけ。file: などは開かない）
-    win.webContents.setWindowOpenHandler(({ url }) => {
+    w.webContents.setWindowOpenHandler(({ url }) => {
       if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url)
       return { action: 'deny' }
     })
+    const query = popout ? { popout } : undefined
     if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
-      void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+      const url = new URL(process.env.ELECTRON_RENDERER_URL)
+      if (popout) url.searchParams.set('popout', popout)
+      void w.loadURL(url.toString())
     } else {
-      void win.loadFile(join(__dirname, '../renderer/index.html'))
+      void w.loadFile(join(__dirname, '../renderer/index.html'), { query })
     }
+  }
+
+  // ---- 別ウィンドウ ----
+  // タブを別ウィンドウに出す。端末（xterm.js）と判定はメインのウィンドウに残したまま、
+  // そこに書いたものを別ウィンドウへ送り、別ウィンドウで打った文字はメインのウィンドウの端末に入れる
+
+  function popoutTitle(tabId: string): string {
+    const found = store.tab(tabId)
+    if (!found) return 'nagaya'
+    const { session, tab } = found
+    const name = session.tabs.length > 1 ? `${session.name} / ${tabLabel(tab)}` : session.name
+    const host = tab.host ? `（${tab.host}）` : ''
+    return `${states.get(tabId) === 'blocked' ? '[確認待ち] ' : ''}${name}${host} - nagaya`
+  }
+
+  function popoutOf(sender: Electron.WebContents): string | null {
+    for (const [id, p] of popouts) if (!p.win.isDestroyed() && p.win.webContents === sender) return id
+    return null
+  }
+
+  function sendPopout(tabId: string, msg: PopoutMessage): void {
+    const p = popouts.get(tabId)
+    if (!p || p.win.isDestroyed()) return
+    if (p.ready) p.win.webContents.send('popout:data', msg)
+    else p.queue.push(msg)
+  }
+
+  function focusWindow(w: BrowserWindow): void {
+    if (w.isMinimized()) w.restore()
+    w.show()
+    w.focus()
+  }
+
+  /** タブを別ウィンドウで開く（開いていれば前に出す） */
+  function openPopout(tabId: string): void {
+    const opened = popouts.get(tabId)
+    if (opened && !opened.win.isDestroyed()) return focusWindow(opened.win)
+    if (!win || !store.tab(tabId)) return
+    const b = win.getBounds()
+    const pw = new BrowserWindow({
+      width: Math.max(480, Math.round(b.width * 0.7)),
+      height: Math.max(320, Math.round(b.height * 0.8)),
+      minWidth: 320,
+      minHeight: 200,
+      title: popoutTitle(tabId),
+      backgroundColor: backgroundColor(),
+      icon,
+      show: false,
+      autoHideMenuBar: true,
+      webPreferences: webPreferences(),
+    })
+    if (process.platform !== 'darwin') pw.setMenu(null)
+    popouts.set(tabId, { win: pw, ready: false, queue: [] })
+    // タイトルはこちらで決める（ページの <title> で上書きさせない）
+    pw.on('page-title-updated', (e) => e.preventDefault())
+    pw.on('ready-to-show', () => pw.show())
+    pw.on('focus', () => {
+      pw.flashFrame(false)
+      notifications.get(tabId)?.close()
+      notifications.delete(tabId)
+      send('popout:focus', tabId, true)
+    })
+    pw.on('blur', () => send('popout:focus', tabId, false))
+    pw.on('closed', () => {
+      if (popouts.get(tabId)?.win === pw) popouts.delete(tabId)
+      send('popout:closed', tabId)
+    })
+    loadRenderer(pw, tabId)
+    // メインのウィンドウに、表示を送り始めてもらう（別ウィンドウの準備ができるまでは queue に溜める）
+    send('popout:opened', tabId)
+  }
+
+  function closePopout(tabId: string): void {
+    const p = popouts.get(tabId)
+    if (p && !p.win.isDestroyed()) p.win.close()
   }
 
   // ---- IPC ----
@@ -436,6 +755,7 @@ function main(): void {
       { label: '編集…', click: () => choose({ type: 'edit' }) },
       { label: '複製…', click: () => choose({ type: 'duplicate' }) },
       { label: '再起動', click: () => choose({ type: 'restart' }) },
+      popoutMenuItem(id),
       { type: 'separator' },
       {
         label: last ? 'タブを閉じる（最後の1枚は閉じられません）' : 'タブを閉じる…',
@@ -472,7 +792,66 @@ function main(): void {
         enabled: inSplit,
         click: () => choose({ type: 'unsplit' }),
       },
+      { type: 'separator' },
+      popoutMenuItem(id),
     ])
+  })
+
+  /** 「新しいウィンドウで開く」（開いていれば「別ウィンドウを前に出す」） */
+  function popoutMenuItem(tabId: string): MenuItemConstructorOptions {
+    const opened = popouts.has(tabId)
+    return {
+      label: opened ? '別ウィンドウを前に出す' : '新しいウィンドウで開く',
+      click: () => openPopout(tabId),
+    }
+  }
+
+  ipcMain.on('popout:relay', (e, tabId: string, msg: PopoutMessage) => {
+    if (e.sender !== win?.webContents) return
+    sendPopout(tabId, msg)
+  })
+  ipcMain.on('popout:close', (e, tabId: string) => {
+    if (e.sender === win?.webContents) closePopout(tabId)
+  })
+  ipcMain.on('popout:show', (e, tabId: string) => {
+    if (e.sender !== win?.webContents) return
+    const p = popouts.get(tabId)
+    if (p && !p.win.isDestroyed()) focusWindow(p.win)
+  })
+  ipcMain.on('popout:ready', (e) => {
+    const id = popoutOf(e.sender)
+    const p = id ? popouts.get(id) : undefined
+    if (!id || !p) return
+    if (p.ready) {
+      // 別ウィンドウを読み込み直した: 表示を送り直してもらう
+      send('popout:opened', id)
+      return
+    }
+    p.ready = true
+    for (const msg of p.queue.splice(0)) e.sender.send('popout:data', msg)
+  })
+  ipcMain.on('popout:input', (e, data: string) => {
+    const id = popoutOf(e.sender)
+    if (id && typeof data === 'string') send('popout:input', id, data)
+  })
+  ipcMain.on('popout:resize', (e, cols: number, rows: number) => {
+    const id = popoutOf(e.sender)
+    if (id && Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) send('popout:resize', id, cols, rows)
+  })
+  ipcMain.handle('popout:menu', async (e, hasSelection: boolean): Promise<PopoutMenuAction> => {
+    const id = popoutOf(e.sender)
+    const p = id ? popouts.get(id) : undefined
+    if (!p) return null
+    return new Promise((resolve) => {
+      let chosen: PopoutMenuAction = null
+      const choose = (v: PopoutMenuAction) => () => (chosen = v)
+      Menu.buildFromTemplate([
+        { label: 'コピー', enabled: hasSelection === true, click: choose('copy') },
+        { label: '貼り付け', click: choose('paste') },
+        { type: 'separator' },
+        { label: '元のウィンドウに戻す', click: choose('return') },
+      ]).popup({ window: p.win, callback: () => resolve(chosen) })
+    })
   })
 
   // ---- グループ ----
@@ -510,6 +889,9 @@ function main(): void {
     store.setFont(font)
     send('settings:changed', store.settings)
   })
+  ipcMain.handle('screens:load', (_e, id: string): SavedScreen | null =>
+    store.settings.keepScreen && store.tab(id) ? screens.load(id) : null,
+  )
 
   ipcMain.handle('pty:start', (_e, id: string, cols: number, rows: number, reconnect: boolean) => {
     const cfg = store.tab(id)?.tab
@@ -581,7 +963,15 @@ function main(): void {
     rules.close()
     if (process.platform !== 'darwin') app.quit()
   })
-  app.on('before-quit', () => {
+  app.on('before-quit', (ev) => {
+    // 確認してから終わる。先にプロセスを止めると「プロセスが終了しました」が画面に混ざるので、表示を残してから止める
+    if (!closeReady && win) {
+      ev.preventDefault()
+      void prepareClose().then((ok) => {
+        if (ok) app.quit()
+      })
+      return
+    }
     updates.stop()
     ptys.killAll()
   })

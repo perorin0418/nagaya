@@ -44,7 +44,7 @@ export class SessionStore {
     groups: [],
     sessions: [],
     selectedId: null,
-    settings: { theme: 'system', font: { ...DEFAULT_FONT } },
+    settings: { theme: 'system', font: { ...DEFAULT_FONT }, keepScreen: true },
   }
 
   constructor(private readonly file: string) {
@@ -130,6 +130,16 @@ export class SessionStore {
   setFont(font: FontSetting): void {
     this.data.settings.font = normalizeFont(font)
     this.save()
+  }
+
+  setKeepScreen(keep: boolean): void {
+    this.data.settings.keepScreen = keep === true
+    this.save()
+  }
+
+  /** すべてのタブの id */
+  tabIds(): Set<string> {
+    return new Set(this.data.sessions.flatMap((s) => s.tabs.map((t) => t.id)))
   }
 
   // ---- セッション ----
@@ -367,6 +377,7 @@ export function parseStore(raw: Record<string, unknown>): StoreFile {
     settings: {
       theme: THEMES.includes(settings.theme as ThemeSetting) ? (settings.theme as ThemeSetting) : 'system',
       font: normalizeFont(settings.font),
+      keepScreen: settings.keepScreen !== false,
     },
   }
 }

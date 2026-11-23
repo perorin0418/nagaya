@@ -7,6 +7,7 @@ import type {
   PaneNode,
   PtyExit,
   RulesPayload,
+  SavedScreen,
   SessionConfig,
   SessionGroup,
   SessionMeta,
@@ -135,4 +136,41 @@ export interface NagayaApi {
   clipboardWrite(text: string): void
   /** 画面のテキストをファイルに保存する（保存ダイアログを出す） */
   saveScreen(defaultName: string, text: string): Promise<string | null>
+  /** 前回の終了のときに残した、タブの表示（残していなければ null） */
+  loadSavedScreen(id: string): Promise<SavedScreen | null>
+  /** 終了する前に、タブごとの表示を集める（cb が返したものをメインが残す） */
+  onCollectScreens(cb: () => { id: string; data: string }[]): () => void
+
+  // ---- 別ウィンドウ（メインのウィンドウの側） ----
+  /** タブが別ウィンドウで開かれた（表示を送り始める） */
+  onPopoutOpened(cb: (id: string) => void): () => void
+  /** 別ウィンドウが閉じた（メインのウィンドウに戻す） */
+  onPopoutClosed(cb: (id: string) => void): () => void
+  /** 別ウィンドウで打った文字 */
+  onPopoutInput(cb: (id: string, data: string) => void): () => void
+  /** 別ウィンドウの端末の大きさが変わった */
+  onPopoutResize(cb: (id: string, cols: number, rows: number) => void): () => void
+  /** 別ウィンドウが前面に来た・離れた */
+  onPopoutFocus(cb: (id: string, focused: boolean) => void): () => void
+  /** 端末に書いたものを別ウィンドウへ送る（snapshot は開いた時点の表示。cols・rows はその大きさ） */
+  popoutRelay(id: string, msg: PopoutMessage): void
+  /** 別ウィンドウを閉じる（メインのウィンドウに戻す） */
+  popoutClose(id: string): void
+  /** 別ウィンドウを前に出す */
+  popoutShow(id: string): void
+
+  // ---- 別ウィンドウ（別ウィンドウの側） ----
+  popoutReady(): void
+  popoutInput(data: string): void
+  popoutResize(cols: number, rows: number): void
+  popoutMenu(hasSelection: boolean): Promise<PopoutMenuAction>
+  onPopoutData(cb: (msg: PopoutMessage) => void): () => void
 }
+
+/** メインのウィンドウから別ウィンドウへ送るもの */
+export type PopoutMessage =
+  | { type: 'snapshot'; data: string; cols: number; rows: number }
+  | { type: 'data'; data: string }
+
+/** 別ウィンドウの右クリックメニューで選ばれた操作 */
+export type PopoutMenuAction = 'copy' | 'paste' | 'return' | null

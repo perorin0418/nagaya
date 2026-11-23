@@ -108,6 +108,16 @@ export interface FontSetting {
 export interface Settings {
   theme: ThemeSetting
   font: FontSetting
+  /** 終了したときの端末の表示を残し、次に起動したときに出すか */
+  keepScreen: boolean
+}
+
+/** 終了したときに残した、端末1枚分の表示 */
+export interface SavedScreen {
+  /** xterm.js の表示を書き出したもの（色などのエスケープシーケンスを含む） */
+  data: string
+  /** 残した時刻（Date.now()） */
+  savedAt: number
 }
 
 /** SSH が接続エラーで終わったときの終了コード */

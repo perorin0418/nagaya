@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isNewer, parseRelease, parseVersion } from '../src/shared/version'
+import { findWinZip, isNewer, parseRelease, parseVersion } from '../src/shared/version'
 
 describe('parseVersion（版を読む）', () => {
   it('先頭の v はあってもなくてもよい', () => {
@@ -40,6 +40,7 @@ describe('parseRelease（GitHub の応答を読む）', () => {
     expect(parseRelease(base)).toEqual({
       version: '0.4.0',
       url: 'https://github.com/perorin0418/nagaya/releases/tag/v0.4.0',
+      winZip: null,
     })
   })
 
@@ -49,5 +50,43 @@ describe('parseRelease（GitHub の応答を読む）', () => {
     expect(parseRelease({ ...base, html_url: 'https://example.com/' })).toBeNull()
     expect(parseRelease({ message: 'Not Found' })).toBeNull()
     expect(parseRelease(null)).toBeNull()
+  })
+})
+
+describe('findWinZip（Windows 用の zip を探す）', () => {
+  const zip = {
+    name: 'nagaya-0.5.0-win-x64.zip',
+    size: 154785740,
+    digest: 'sha256:4463DD9CDB6D7109289DBD6C1E7E2BADD6452F4F56979551CD172206002F9691',
+    browser_download_url: 'https://github.com/perorin0418/nagaya/releases/download/v0.5.0/nagaya-0.5.0-win-x64.zip',
+  }
+
+  it('その版の zip を見つけ、SHA-256 を小文字にする', () => {
+    expect(findWinZip([{ name: 'other.txt' }, zip], '0.5.0')).toEqual({
+      name: 'nagaya-0.5.0-win-x64.zip',
+      url: zip.browser_download_url,
+      size: 154785740,
+      sha256: '4463dd9cdb6d7109289dbd6c1e7e2badd6452f4f56979551cd172206002f9691',
+    })
+  })
+
+  it('digest がなければ sha256 は null', () => {
+    expect(findWinZip([{ ...zip, digest: undefined }], '0.5.0')?.sha256).toBeNull()
+  })
+
+  it('版の違う zip・よそからのダウンロード・大きさのないものは使わない', () => {
+    expect(findWinZip([zip], '0.6.0')).toBeNull()
+    expect(findWinZip([{ ...zip, browser_download_url: 'https://example.com/nagaya-0.5.0-win-x64.zip' }], '0.5.0')).toBeNull()
+    expect(findWinZip([{ ...zip, size: 0 }], '0.5.0')).toBeNull()
+    expect(findWinZip(undefined, '0.5.0')).toBeNull()
+  })
+
+  it('parseRelease でも読む', () => {
+    const r = parseRelease({
+      tag_name: 'v0.5.0',
+      html_url: 'https://github.com/perorin0418/nagaya/releases/tag/v0.5.0',
+      assets: [zip],
+    })
+    expect(r?.winZip?.name).toBe('nagaya-0.5.0-win-x64.zip')
   })
 })
