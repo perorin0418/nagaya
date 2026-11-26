@@ -84,7 +84,11 @@ export class PtyManager {
       rows: Math.max(rows, 2),
       cwd: spec.cwd,
       env,
-      // Windows は ConPTY を使う（node-pty の既定）
+      // Windows は ConPTY を使う（node-pty の既定）。
+      // ConPTY は起動すると画面を消して左上から描き始めるので、前回の表示や、終了・再接続の前の表示が消える。
+      // カーソルの位置を引き継がせると、消さずにその位置から描く（ConPTY がカーソルの位置を問い合わせ、
+      // xterm.js が答える。答えが届くまで ConPTY は待つので、renderer は起動を待たずに書き込めるようにしてある）
+      conptyInheritCursor: process.platform === 'win32',
     })
     this.ptys.set(cfg.id, p)
     p.onData((d) => this.push(cfg.id, d))

@@ -14,6 +14,7 @@ import {
   type SplitDir,
   type TabConfig,
 } from '@shared/types'
+import { Dashboard } from './Dashboard'
 import { ExplainPanel } from './ExplainPanel'
 import { FontDialog } from './FontDialog'
 import { PromptDialog } from './PromptDialog'
@@ -71,6 +72,10 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null)
   /** 別ウィンドウで開いているタブ */
   const [popped, setPopped] = useState<Record<string, true>>({})
+  /** ダッシュボードを出しているか（端末の上に重ねて出す。保存しない） */
+  const [dashboard, setDashboard] = useState(false)
+  /** ダッシュボードで、キーボードの入力先になっているカードのタブ */
+  const [panelTab, setPanelTab] = useState<string | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
 
   const { sessions, groups } = layout
@@ -97,6 +102,7 @@ export function App() {
 
   /** セッション（とタブ）を表示する */
   const show = useCallback((sessionId: string, tabId?: string | null) => {
+    setDashboard(false)
     setSelectedId(sessionId)
     if (tabId) setActiveTabs((a) => (a[sessionId] === tabId ? a : { ...a, [sessionId]: tabId }))
   }, [])
@@ -170,15 +176,26 @@ export function App() {
   const visibleIds = view ? view.panes.map((p) => p.tabId) : tabId ? [tabId] : []
   const visibleKey = visibleIds.join(',')
 
+  const allTabIds = sessions.flatMap((s) => s.tabs.map((t) => t.id)).join(',')
+
   // 選択を main に知らせ、端末にフォーカスを移す
   useEffect(() => {
     if (!loaded) return
+    if (dashboard) {
+      // ダッシュボードでは端末を見ていないので、未読はそのまま付ける（カードに出す）。
+      // 確認待ちはカードに出るので、ウィンドウが前面にあれば通知は出さない（main にはすべてのタブを見ていると伝える）
+      // ただしキーボードの入力先になっているカードのタブは、見ているものとして扱う
+      visibleRef.current = panelTab ? [panelTab] : []
+      api.reportSelected(selectedId, tabId, allTabIds ? allTabIds.split(',') : [])
+      if (panelTab && document.hasFocus()) markRead([panelTab])
+      return
+    }
     const ids = visibleKey ? visibleKey.split(',') : []
     api.reportSelected(selectedId, tabId, ids)
     visibleRef.current = ids
     if (document.hasFocus()) markRead(ids)
     if (tabId) requestAnimationFrame(() => terminals.focus(tabId))
-  }, [selectedId, tabId, visibleKey, loaded, markRead])
+  }, [selectedId, tabId, visibleKey, loaded, markRead, dashboard, allTabIds, panelTab])
 
   const secs = useMemo(() => toSections(layout), [layout])
 
@@ -188,6 +205,7 @@ export function App() {
     (d: number) => {
       if (ordered.length === 0) return
       const i = ordered.findIndex((s) => s.id === selectedId)
+      setDashboard(false)
       setSelectedId(ordered[(i + d + ordered.length) % ordered.length].id)
     },
     [ordered, selectedId],
@@ -264,6 +282,7 @@ export function App() {
         else if (action === 'next-tab') stepTab(1)
         else if (action === 'prev-tab') stepTab(-1)
         else if (action === 'font-settings') setDialog({ kind: 'font' })
+        else if (action === 'toggle-dashboard') setDashboard((v) => !v)
       }),
     [saveScreen, step, stepTab, newSession, newTab, selected],
   )
@@ -470,7 +489,12 @@ export function App() {
         unread={unread}
         conns={conns}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={(id) => {
+          setDashboard(false)
+          setSelectedId(id)
+        }}
+        dashboard={dashboard}
+        onToggleDashboard={() => setDashboard((v) => !v)}
         onNewSession={() => newSession()}
         onNewGroup={() => setDialog({ kind: 'new-group' })}
         onSessionMenu={sessionMenu}
@@ -573,6 +597,18 @@ export function App() {
             </div>
           ) : null}
         </div>
+        <Dashboard
+          visible={dashboard && loaded}
+          sections={secs}
+          states={states}
+          unread={unread}
+          conns={conns}
+          onOpen={show}
+          onRead={markRead}
+          popped={popped}
+          onWatch={setPanelTab}
+          onClose={() => setDashboard(false)}
+        />
       </section>
       {dialog?.kind === 'session' ? (
         <SessionDialog
