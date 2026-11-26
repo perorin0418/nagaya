@@ -33,6 +33,9 @@ interface Props {
   onMoveGroup(id: string, beforeId: string | null): void
   ruleErrors: string[]
   onOpenRules(): void
+  /** ダッシュボードを出しているか */
+  dashboard: boolean
+  onToggleDashboard(): void
 }
 
 /** ドロップ先の目印（どの行の上・下か） */
@@ -125,6 +128,23 @@ export function Sidebar(p: Props) {
       <div className="side-head">
         <span>セッション</span>
         <span className="side-head-buttons">
+          <button
+            className={`icon${p.dashboard ? ' on' : ''}`}
+            onClick={p.onToggleDashboard}
+            title="ダッシュボード（Ctrl+Shift+O）"
+            aria-label="ダッシュボード"
+            aria-pressed={p.dashboard}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M2 2.5h5v5h-5z M9 2.5h5v5h-5z M2 9.5h5v4h-5z M9 9.5h5v4h-5z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
           <button className="icon" onClick={p.onNewGroup} title="新しいグループ" aria-label="新しいグループ">
             <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
               <path
@@ -221,7 +241,7 @@ export function Sidebar(p: Props) {
                   return (
                     <div
                       key={s.id}
-                      className={`sess${s.id === p.selectedId ? ' sel' : ''}${isUnread ? ' unread' : ''}${m ? ` drop-${m}` : ''}`}
+                      className={`sess${s.id === p.selectedId && !p.dashboard ? ' sel' : ''}${isUnread ? ' unread' : ''}${m ? ` drop-${m}` : ''}`}
                       draggable
                       onDragStart={(e) => {
                         hoverOut()

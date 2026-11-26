@@ -393,6 +393,7 @@ function main(): void {
     { key: 'pageup', ctrl: true, shift: false, action: 'prev-tab' },
     { key: 's', ctrl: true, shift: true, action: 'save-screen' },
     { key: 'd', ctrl: true, shift: true, action: 'toggle-explain' },
+    { key: 'o', ctrl: true, shift: true, action: 'toggle-dashboard' },
     { key: 'r', ctrl: true, shift: true, action: 'reload-rules' },
   ]
 
@@ -431,6 +432,7 @@ function main(): void {
       {
         label: '表示',
         submenu: [
+          { label: 'ダッシュボード', ...acc('CmdOrCtrl+Shift+O'), click: menu('toggle-dashboard') },
           { label: '判定の詳細', ...acc('CmdOrCtrl+Shift+D'), click: menu('toggle-explain') },
           { type: 'separator' },
           {

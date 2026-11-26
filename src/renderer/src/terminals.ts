@@ -71,6 +71,12 @@ interface Entry {
   popped: boolean
   /** 別ウィンドウに開いた時点の表示を送るまで、その後に書いたものを溜めておく */
   pending: string[] | null
+  /** 表示が変わるたびに増える数（ダッシュボードが、変わったカードだけ描き直すため） */
+  rev: number
+  /** いつもの置き場（タブの TerminalSlot） */
+  home: HTMLElement
+  /** ダッシュボードに貸し出しているか（そのあいだは home に戻さない） */
+  borrowed: boolean
 }
 
 /** 端末の右クリックメニューで選ばれた、分割の操作（App が処理する） */
@@ -115,6 +121,7 @@ class TerminalManager {
       if (!e) return
       this.write(e, data, () => {
         e.dirty = true
+        e.rev++
       })
     })
     api.onPtyExit(({ id, exitCode }) => this.onExit(id, exitCode))
@@ -356,7 +363,8 @@ class TerminalManager {
     const id = cfg.id
     let e = this.entries.get(id)
     if (e) {
-      if (e.el.parentElement !== container) container.appendChild(e.el)
+      e.home = container
+      if (!e.borrowed && e.el.parentElement !== container) container.appendChild(e.el)
       return
     }
     const el = document.createElement('div')
@@ -402,6 +410,9 @@ class TerminalManager {
       floor: null,
       popped: false,
       pending: null,
+      rev: 0,
+      home: container,
+      borrowed: false,
     }
     this.entries.set(id, entry)
     entry.observer.observe(el)
@@ -529,11 +540,13 @@ class TerminalManager {
     e.stabilizer.reset()
     this.emitState(e.id, 'unknown')
     e.startedAt = performance.now()
+    // 起動を待つあいだに来た端末の問い合わせ（ConPTY のカーソル位置など）にも答えられるよう、先に動いていることにする
+    e.running = true
     const r = await api.ptyStart(e.id, e.term.cols, e.term.rows, reconnect)
     if (r.ok) {
-      e.running = true
       this.emitConn({ id: e.id, status: 'running' })
     } else {
+      e.running = false
       this.write(e, `\r\n\x1b[31m起動できませんでした: ${r.error ?? ''}\x1b[0m\r\n\x1b[2m[Enter で再試行します]\x1b[0m\r\n`)
       this.emitConn({ id: e.id, status: 'exited' })
     }
@@ -545,6 +558,7 @@ class TerminalManager {
     api.ptyKill(id)
     e.running = false
     e.term.reset()
+    e.rev++
     this.relay(e, '\x1bc') // 別ウィンドウの端末も消す
     e.floor?.dispose()
     e.floor = null
@@ -652,6 +666,51 @@ class TerminalManager {
       this.detailListeners.delete(l)
       if (this.explainId === id) this.explainId = null
     }
+  }
+
+  // ---- ダッシュボード ----
+
+  /** 今の画面（戻した前回の表示の行は空にする。判定に使うのと同じ行） */
+  liveLines(id: string): string[] {
+    const e = this.entries.get(id)
+    return e ? this.detectLines(e) : []
+  }
+
+  /** 表示が変わるたびに増える数（端末がなければ -1） */
+  revision(id: string): number {
+    return this.entries.get(id)?.rev ?? -1
+  }
+
+  /** 端末で打ったのと同じ扱いで送る（Enter で起動し直す・再接続なども効く） */
+  input(id: string, data: string): void {
+    this.entries.get(id)?.term.input(data, true)
+  }
+
+  /**
+   * 端末をダッシュボードのカードに貸し出す（container に移して、そこで直接操作できるようにする）。
+   * 桁数・行数は container に合わせ直す。別ウィンドウで開いているタブは貸し出さない（false を返す）
+   */
+  borrow(id: string, container: HTMLElement): boolean {
+    const e = this.entries.get(id)
+    if (!e || e.popped) return false
+    e.borrowed = true
+    if (e.el.parentElement !== container) container.appendChild(e.el)
+    this.fitEntry(e)
+    return true
+  }
+
+  /** 貸し出した端末を、いつもの置き場に戻す */
+  giveBack(id: string): void {
+    const e = this.entries.get(id)
+    if (!e?.borrowed) return
+    e.borrowed = false
+    if (e.el.parentElement !== e.home) e.home.appendChild(e.el)
+    this.fitEntry(e)
+  }
+
+  /** 再接続を待っているか */
+  isReconnecting(id: string): boolean {
+    return (this.entries.get(id)?.reconnectTimer ?? null) !== null
   }
 
   candidate(id: string): AgentState {

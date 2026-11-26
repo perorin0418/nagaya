@@ -52,6 +52,7 @@ export type MenuAction =
   | 'next-tab'
   | 'prev-tab'
   | 'font-settings'
+  | 'toggle-dashboard'
 
 export interface AppInfo {
   platform: string
