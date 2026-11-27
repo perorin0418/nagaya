@@ -61,6 +61,8 @@ export function App() {
   const statesRef = useRef<Record<string, AgentState>>({})
   /** 画面に出ているタブ（分割していればその全部） */
   const visibleRef = useRef<string[]>([])
+  /** ダッシュボードを出しているか（出しているあいだは、ウィンドウに戻っても既読にしない） */
+  const dashboardRef = useRef(false)
   const termsRef = useRef<HTMLDivElement>(null)
   const [conns, setConns] = useState<Record<string, ConnEvent>>({})
   const [dialog, setDialog] = useState<DialogState>(null)
@@ -137,7 +139,9 @@ export function App() {
       if (done && !watching) setUnread((u) => ({ ...u, [id]: true }))
     })
     // ウィンドウに戻ってきたら、表示しているタブは既読にする
-    const onFocus = (): void => markRead(visibleRef.current)
+    const onFocus = (): void => {
+      if (!dashboardRef.current) markRead(visibleRef.current)
+    }
     window.addEventListener('focus', onFocus)
     const offConn = terminals.onConn((ev) => setConns((c) => ({ ...c, [ev.id]: ev })))
     const offPopout = terminals.onPopout(({ id, popped: p, focused }) => {
@@ -181,13 +185,14 @@ export function App() {
   // 選択を main に知らせ、端末にフォーカスを移す
   useEffect(() => {
     if (!loaded) return
+    dashboardRef.current = dashboard
     if (dashboard) {
       // ダッシュボードでは端末を見ていないので、未読はそのまま付ける（カードに出す）。
       // 確認待ちはカードに出るので、ウィンドウが前面にあれば通知は出さない（main にはすべてのタブを見ていると伝える）
-      // ただしキーボードの入力先になっているカードのタブは、見ているものとして扱う
+      // ただしキーボードの入力先になっているカードのタブは、見ているものとして扱う（新たに未読にはしない）。
+      // すでに付いている未読は、カードの「既読にする」ボタンを押すまで消さない
       visibleRef.current = panelTab ? [panelTab] : []
       api.reportSelected(selectedId, tabId, allTabIds ? allTabIds.split(',') : [])
-      if (panelTab && document.hasFocus()) markRead([panelTab])
       return
     }
     const ids = visibleKey ? visibleKey.split(',') : []
