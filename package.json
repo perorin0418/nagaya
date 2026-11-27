@@ -1,6 +1,6 @@
 {
   "name": "nagaya",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Claude Code のセッションを並べて状態を監視するデスクトップアプリ",
   "author": "perorin0418",
   "license": "MIT",
