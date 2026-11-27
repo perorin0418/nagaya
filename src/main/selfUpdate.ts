@@ -4,6 +4,9 @@
  * 1. リリースの zip を一時フォルダーにダウンロードし、大きさと SHA-256 を確かめる
  * 2. PowerShell のスクリプトを切り離して起動し、nagaya は終わる
  * 3. スクリプトは nagaya が終わるのを待って zip を展開し、今のフォルダーに上書きして、nagaya を起動し直す
+ *    - 待っても nagaya のフォルダーの実行ファイル（nagaya.exe・OpenConsole.exe など）が残っていれば、強制終了する
+ *    - 上書きのあと、nagaya.exe と app.asar が新しい版と同じか確かめる
+ *    - 古い nagaya がまだ動いていれば、起動し直さない（二重起動の防止で新しい版がすぐ終わるため）
  * 4. 結果（ok・エラー）は userData/update-result.txt に書き、次に起動した nagaya が読む
  *
  * 前の版にしかないファイルは消さない（展開したフォルダーに利用者が置いたものを消さないように）。
@@ -68,14 +71,36 @@ const SCRIPT = String.raw`param(
 $ErrorActionPreference = 'Stop'
 $log = Join-Path (Split-Path $Zip) 'update.log'
 function Log($m) { Add-Content -LiteralPath $log -Value ("[" + (Get-Date -Format s) + "] " + $m) -Encoding UTF8 }
+# processes whose executable is under the nagaya folder (nagaya.exe, OpenConsole.exe, winpty-agent.exe, ...)
+$prefix = $Dest.TrimEnd('\') + '\'
+function Left {
+  @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.Id -ne $PID -and $_.Path -and $_.Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+  })
+}
 try {
   Log "wait for pid $ProcId"
   try { Wait-Process -Id $ProcId -Timeout 60 -ErrorAction Stop } catch { }
-  # wait for other nagaya.exe processes (renderer, gpu, ...) to exit
-  for ($i = 0; $i -lt 30; $i++) {
-    $left = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Exe }
-    if (-not $left) { break }
+  # wait for the other processes (renderer, gpu, console hosts, ...) to exit
+  for ($i = 0; $i -lt 20; $i++) {
+    if ((Left).Count -eq 0) { break }
     Start-Sleep -Milliseconds 500
+  }
+  # (1) force-kill what is still running; otherwise the files stay locked and the old version keeps running
+  $left = Left
+  if ($left.Count -gt 0) {
+    foreach ($p in $left) {
+      Log ("kill " + $p.Name + " (pid " + $p.Id + ", " + $p.Path + ")")
+      try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { Log ("kill failed: " + $_) }
+    }
+    for ($i = 0; $i -lt 20; $i++) {
+      if ((Left).Count -eq 0) { break }
+      Start-Sleep -Milliseconds 500
+    }
+    $left = Left
+    if ($left.Count -gt 0) {
+      throw ("processes are still running: " + (($left | ForEach-Object { $_.Name + " (pid " + $_.Id + ")" }) -join ", "))
+    }
   }
   $stage = Join-Path (Split-Path $Zip) 'stage'
   if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
@@ -99,13 +124,30 @@ try {
   Log "copy $src -> $Dest"
   & robocopy $src $Dest /E /R:20 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
   if ($LASTEXITCODE -ge 8) { throw ("robocopy failed (exit code " + $LASTEXITCODE + ")") }
+  # (3) make sure the main files were really replaced
+  foreach ($rel in @('nagaya.exe', 'resources\app.asar')) {
+    $a = Join-Path $src $rel
+    if (-not (Test-Path -LiteralPath $a)) { continue }
+    $b = Join-Path $Dest $rel
+    if (-not (Test-Path -LiteralPath $b)) { throw ($rel + " was not copied") }
+    if ((Get-FileHash -LiteralPath $a -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $b -Algorithm SHA256).Hash) {
+      throw ($rel + " was not replaced (still the old version)")
+    }
+  }
   Set-Content -LiteralPath $Result -Value ("ok " + $Version) -Encoding UTF8
   Log "done"
 } catch {
   Log ("error: " + $_)
   Set-Content -LiteralPath $Result -Value ("error " + $_ + " (log: " + $log + ")") -Encoding UTF8
 }
-Start-Process -FilePath $Exe
+# (3) do not start nagaya while an old one is still running (the new one would exit at the single instance lock)
+$running = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $Exe })
+if ($running.Count -gt 0) {
+  Log ("not started: nagaya is still running (pid " + (($running | ForEach-Object { $_.Id }) -join ", ") + ")")
+} else {
+  Start-Process -FilePath $Exe
+  Log "started $Exe"
+}
 `
 
 /** 更新のスクリプトを切り離して起動する（この後 nagaya を終わらせること） */
