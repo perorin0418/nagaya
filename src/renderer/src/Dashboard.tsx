@@ -64,7 +64,7 @@ interface Props {
   popped: Record<string, true>
   /** タブを端末で開く（ダッシュボードを閉じる） */
   onOpen(sessionId: string, tabId: string): void
-  /** タブを既読にする */
+  /** タブを既読にする（ダッシュボードでは「既読にする」ボタンを押したときだけ） */
   onRead(tabIds: string[]): void
   /** キーボードの入力先になっているカードが変わった（見ているタブとして扱う。null ならなし） */
   onWatch(tabId: string | null): void
@@ -290,12 +290,10 @@ const Card = memo(function Card(c: CardProps) {
   const running = c.conn !== 'exited' && c.conn !== 'reconnecting' && terminals.isRunning(id)
   const choices = running && c.state === 'blocked' ? parseChoices(terminals.liveLines(id)) : []
   const title = c.session.tabs.length > 1 ? `${c.session.name} / ${tabLabel(c.tab)}` : c.session.name
-  const read = (): void => {
-    if (c.unread) c.onRead([id])
-  }
+  // 触っただけでは既読にしない（返事を書こうとしたカードが「未読」の絞り込みから消えないように）。
+  // 既読にするのは「既読にする」ボタンを押したときだけ
   function key(data: string): void {
     terminals.input(id, data)
-    read()
     terminals.focus(id)
   }
 
@@ -306,11 +304,7 @@ const Card = memo(function Card(c: CardProps) {
   return (
     <div
       className={`card ${c.state}${c.unread ? ' unread' : ''}`}
-      onMouseDown={read}
-      onFocus={() => {
-        read()
-        c.onFocusChange(() => id)
-      }}
+      onFocus={() => c.onFocusChange(() => id)}
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) c.onFocusChange((cur) => (cur === id ? null : cur))
       }}
@@ -324,6 +318,11 @@ const Card = memo(function Card(c: CardProps) {
         {c.tab.host ? <span className="host-tag">{c.tab.host}</span> : null}
         {c.unread ? <span className="unread-tag">未読</span> : null}
         <span className="card-status">{status}</span>
+        {c.unread ? (
+          <button className="tool" onClick={() => c.onRead([id])} title="このタブを既読にする（ダッシュボードでは、触っただけでは既読にならない）">
+            既読にする
+          </button>
+        ) : null}
         <button className="tool" onClick={() => c.onOpen(c.session.id, id)} title="ダッシュボードを閉じて、いつもの画面で表示する">
           端末で開く
         </button>
