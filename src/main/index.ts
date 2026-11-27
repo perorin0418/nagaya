@@ -198,6 +198,9 @@ function main(): void {
       if (win) await dialog.showMessageBox(win, { type: 'error', message: '更新を始められませんでした', detail: (e as Error).message })
       return
     }
+    // タブのプロセスを先に止め、終わらなければ強制的に終える（古い版が残ると、更新のスクリプトがファイルを置き換えられない）
+    ptys.killAll()
+    setTimeout(() => app.exit(0), 5000)
     app.quit()
   }
 
